@@ -1,0 +1,35 @@
+{
+  "name": "chorus-sing-along",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c yellow,cyan \"node server/index.mjs\" \"vite --host 127.0.0.1\"",
+    "build": "tsc -b && vite build",
+    "start": "node server/index.mjs",
+    "test": "vitest run src && node --test server/*.test.mjs",
+    "test:e2e": "playwright test",
+    "check": "tsc -b && npm test"
+  },
+  "dependencies": {
+    "@fontsource/dm-sans": "^5.2.5",
+    "@fontsource/lora": "^5.2.6",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "multer": "^2.0.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "@types/node": "^22.15.30",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.5.1",
+    "concurrently": "^9.1.2",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4"
+  }
+}
