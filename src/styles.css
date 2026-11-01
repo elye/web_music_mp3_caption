@@ -130,13 +130,22 @@ kbd { font-family: inherit; font-size: 9px; display: inline-block; padding: 1px 
 .stage-caption-tools button:hover:not(:disabled) { color: #f4dcba; }
 .stage-caption-tools button span { font-family: sans-serif; font-size: 10px; }
 .caption-tool-divider { height: 12px; width: 1px; background: #ffffff16; }
-.caption-stack { width: 100%; max-width: 1050px; margin: auto; }
-.previous-lyric { font-size: clamp(15px, 1.5vw, 24px); color: #96938d; line-height: 1.6; margin-bottom: 28px; white-space: pre-line; overflow-wrap: anywhere; }
-.current-lyric { font-family: var(--serif); font-size: var(--lyric-size); font-weight: 500; line-height: 1.28; letter-spacing: -0.8px; color: #f4d6a5; white-space: pre-line; overflow-wrap: anywhere; animation: caption-in 320ms ease-out; text-wrap: balance; }
-.next-lyric { font-size: clamp(17px, 1.8vw, 27px); line-height: 1.5; color: #b2afa7; margin-top: 28px; white-space: pre-line; overflow-wrap: anywhere; }
+.caption-stack { position: relative; width: 100%; max-width: 1050px; margin: auto; }
+.lyric-ghosts { position: absolute; inset: 0; pointer-events: none; }
+.lyric-flow > * { will-change: transform, opacity; }
+.previous-lyric { font-size: clamp(15px, 1.5vw, 24px); color: #96938d; line-height: 1.6; margin-bottom: 28px; white-space: pre-line; overflow-wrap: anywhere; transition: color var(--lyric-ms, 700ms) ease; }
+/* Each word is its own box so it can travel from its spot in one layout to its spot in the next. */
+.lyric-word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+.current-lyric { font-family: var(--serif); font-size: var(--lyric-size); font-weight: 500; line-height: 1.28; letter-spacing: -0.8px; color: #f4d6a5; white-space: pre-line; overflow-wrap: anywhere; text-wrap: balance; transition: color var(--lyric-ms, 700ms) ease; }
+.next-lyric { font-size: clamp(17px, 1.8vw, 27px); line-height: 1.5; color: #b2afa7; margin-top: 28px; white-space: pre-line; overflow-wrap: anywhere; transition: color var(--lyric-ms, 700ms) ease; }
+.after-lyric { font-size: clamp(15px, 1.5vw, 24px); line-height: 1.5; color: #8d8a83; margin-top: 14px; white-space: pre-line; overflow-wrap: anywhere; }
 .current-lyric.instrumental { font-size: 29px; font-style: italic; font-weight: 400; color: #d7c9b1; }
 .instrumental-notes { display: block; color: #aa9677; margin-bottom: 17px; }
-.lyrics-count-in { display: inline-block; color: #aaa193; font-size: 10px; margin-top: 19px; }
+.lyrics-count-in { display: block; color: #b9ae9c; font-family: 'DM Sans', sans-serif; font-style: normal; font-weight: 500; font-size: 15px; letter-spacing: 0.4px; font-variant-numeric: tabular-nums; margin-top: 16px; }
+.lyrics-content.is-leaving { opacity: 0; transition: opacity 280ms ease-in; pointer-events: none; }
+.lyrics-content.is-entering { animation: stage-fade-in 700ms ease-out backwards; }
+@keyframes stage-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .lyrics-content.is-leaving { transition: none; } .lyrics-content.is-entering { animation: none; } }
 .no-lyrics { max-width: 680px; margin: auto; }
 .no-lyrics > svg { color: #c2a77b; margin: 12px 0 28px; }
 .no-lyrics h3 { font-family: var(--serif); font-size: clamp(28px, 3vw, 48px); font-weight: 400; overflow-wrap: anywhere; text-wrap: balance; }
@@ -278,8 +287,10 @@ select { border: 1px solid #d9cfc0; background: #f9f6ef; color: #75634d; font-si
 .presenting .lyric-stage { border-radius: 0; border: 0; min-height: 0; padding: 30px 55px 20px; box-shadow: none; }
 .presenting .current-lyric { font-size: calc(var(--lyric-size) * 1.45); }
 .presenting .current-lyric.instrumental { font-size: clamp(28px, 4vw, 46px); }
+.presenting .lyrics-count-in { font-size: clamp(18px, 2vw, 26px); margin-top: 20px; }
 .presenting .previous-lyric { font-size: clamp(20px, 2.6vw, 38px); margin-bottom: 45px; }
 .presenting .next-lyric { font-size: clamp(22px, 2.8vw, 40px); margin-top: 45px; }
+.presenting .after-lyric { font-size: clamp(20px, 2.4vw, 34px); margin-top: 22px; }
 .presenting .player { background: #222327; color: #e0d4c2; border-color: #ffffff0d; padding: 15px 55px 25px; min-height: 105px; }
 .presenting .album-art { background: #3b3530; border-color: #62513e; }
 .presenting .icon-button { color: #a99a83; }
@@ -296,10 +307,10 @@ select { border: 1px solid #d9cfc0; background: #f9f6ef; color: #75634d; font-si
 .high-contrast .current-lyric { color: #fff; }
 .high-contrast .previous-lyric { color: #aaa; }
 .high-contrast .next-lyric { color: #ccc; }
+.high-contrast .after-lyric { color: #999; }
 @keyframes equalize { to { transform: scaleY(0.3); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pause-pulse { 50% { opacity: 0.55; } }
-@keyframes caption-in { from { opacity: 0.45; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @media (min-width: 1550px) {
   .topbar { padding: 0 max(0px, calc((100vw - 1620px) / 2)); }
   .workspace { grid-template-columns: 315px minmax(0, 1fr); padding-top: 40px; padding-bottom: 35px; gap: 42px; }
@@ -374,7 +385,7 @@ select { border: 1px solid #d9cfc0; background: #f9f6ef; color: #75634d; font-si
   .welcome-stage .stage-cta { font-size: 11px; padding: 12px 20px; }
   .current-lyric { font-size: calc(var(--lyric-size) * 0.7); }
   .current-lyric.instrumental { font-size: 25px; }
-  .previous-lyric, .next-lyric { font-size: 17px; }
+  .previous-lyric, .next-lyric, .after-lyric { font-size: 17px; }
   .no-lyrics h3 { font-size: 32px; }
   .no-lyrics > p:not(.welcome-kicker) { font-size: 11px; }
   .no-lyrics .stage-buttons { gap: 7px; }
@@ -435,6 +446,7 @@ select { border: 1px solid #d9cfc0; background: #f9f6ef; color: #75634d; font-si
   .presenting .player { padding: 12px 20px 24px; position: relative; }
   .presenting .previous-lyric { margin-bottom: 27px; font-size: 18px; }
   .presenting .next-lyric { margin-top: 27px; font-size: 20px; }
+  .presenting .after-lyric { margin-top: 14px; font-size: 18px; }
   .presenting .current-lyric { font-size: calc(var(--lyric-size) * 0.85); }
   .presenting .current-lyric.instrumental { font-size: 27px; }
   .drop-overlay h2 { font-size: 28px; }

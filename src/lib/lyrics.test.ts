@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeLyricIndex, formatTime, nextLyricIndex, normalizeLyrics, parseLrc, parseSrt, parseVtt, titleFromFilename, toLrc } from './lyrics';
+import { activeLyricIndex, formatTime, lyricTransitionMs, lyricWindow, nextLyricIndex, normalizeLyrics, parseLrc, parseSrt, parseVtt, titleFromFilename, toLrc } from './lyrics';
 import { softenedGain } from './audio';
 import { encodeWav } from './transcription';
 
@@ -61,6 +61,29 @@ Invalid`)).toEqual([
     expect(activeLyricIndex([], 8)).toBe(-1);
     expect(nextLyricIndex(lyrics, 5)).toBe(1);
     expect(nextLyricIndex(lyrics, 10)).toBe(-1);
+  });
+  it('windows the lines around the playhead, promoting the next line during the lead-in', () => {
+    const lyrics = [{ start: 2, end: 4, text: 'A' }, { start: 7, text: 'B' }, { start: 9, text: 'C' }, { start: 12, text: 'D' }];
+    expect(lyricWindow(lyrics, 3)).toEqual({ previous: -1, current: 0, next: 1, after: 2 });
+    expect(lyricWindow(lyrics, 8)).toEqual({ previous: 0, current: 1, next: 2, after: 3 });
+    expect(lyricWindow(lyrics, 5)).toEqual({ previous: 0, current: -1, next: 1, after: 2 });
+    expect(lyricWindow(lyrics, 0)).toEqual({ previous: -1, current: -1, next: 0, after: 1 });
+    expect(lyricWindow(lyrics, 6.4, 0, 0.8)).toEqual({ previous: 0, current: 1, next: 2, after: 3 });
+    expect(lyricWindow(lyrics, 6.1, 0, 0.8)).toEqual({ previous: 0, current: -1, next: 1, after: 2 });
+    expect(lyricWindow(lyrics, 20)).toEqual({ previous: 2, current: 3, next: -1, after: -1 });
+    expect(lyricWindow([], 1)).toEqual({ previous: -1, current: -1, next: -1, after: -1 });
+  });
+  it('takes longer to move when there is more time before the next change', () => {
+    const lyrics = [{ start: 2, text: 'A' }, { start: 3, text: 'B' }, { start: 13, text: 'C' }, { start: 14, text: 'D' }];
+    const ms = (time: number, lead = 0) => lyricTransitionMs(lyrics, lyricWindow(lyrics, time, 0, lead), time, 0, lead);
+    expect(ms(2)).toBe(700); // B is only a second away
+    expect(ms(3)).toBe(2400); // ten seconds until the next change
+    expect(ms(3)).toBeGreaterThan(ms(2));
+    const gappy = [{ start: 2, end: 4, text: 'A' }, { start: 12, text: 'B' }];
+    const gapMs = (time: number) => lyricTransitionMs(gappy, lyricWindow(gappy, time, 0, 1.5), time, 0, 1.5);
+    expect(gapMs(4)).toBe(2400); // entering a long gap
+    expect(gapMs(10.6)).toBe(1400); // promoted early: finishes when the line is due
+    expect(ms(14)).toBe(2400); // last line: nothing follows, so glide as slowly as allowed
   });
   it('round-trips captions with instrumental gaps to LRC', () => {
     const lyrics = [{ start: 2.55, end: 4, text: 'A' }, { start: 7, end: 10, text: 'B' }];

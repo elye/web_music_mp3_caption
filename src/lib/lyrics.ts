@@ -110,6 +110,56 @@ export function nextLyricIndex(lines: LyricLine[], time: number, offset = 0): nu
   return lines.findIndex((line) => line.start > time - offset && line.text.length > 0);
 }
 
+export interface LyricWindow {
+  /** Indexes into `lines`; -1 means the slot is empty. `current` is -1 during instrumental gaps. */
+  previous: number;
+  current: number;
+  next: number;
+  after: number;
+}
+
+/**
+ * Picks the lines shown around the playhead. With `lead` > 0 the upcoming line is promoted to
+ * `current` shortly before it starts, so it can grow into place as the gap message fades away.
+ */
+export function lyricWindow(lines: LyricLine[], time: number, offset = 0, lead = 0): LyricWindow {
+  const position = time - offset;
+  const hasText = (index: number) => index >= 0 && index < lines.length && lines[index].text.length > 0;
+  const textAfter = (from: number) => {
+    for (let i = from + 1; i < lines.length; i++) if (hasText(i)) return i;
+    return -1;
+  };
+  const textBefore = (from: number) => {
+    for (let i = from - 1; i >= 0; i--) if (hasText(i)) return i;
+    return -1;
+  };
+  const active = activeLyricIndex(lines, time, offset);
+  const upcoming = nextLyricIndex(lines, time, offset);
+  let current = hasText(active) ? active : -1;
+  if (current < 0 && lead > 0 && upcoming >= 0 && lines[upcoming].start - position <= lead) current = upcoming;
+  if (current >= 0) {
+    const next = textAfter(current);
+    return { previous: textBefore(current), current, next, after: next >= 0 ? textAfter(next) : -1 };
+  }
+  return { previous: textBefore(upcoming >= 0 ? upcoming : lines.length), current: -1, next: upcoming, after: upcoming >= 0 ? textAfter(upcoming) : -1 };
+}
+
+/**
+ * How long (ms) the move into `window` should take: roughly 60% of the time before the display changes
+ * again, so long holds glide slowly and fast lines stay snappy. A line promoted early during the lead-in
+ * finishes by the time it is due to be sung.
+ */
+export function lyricTransitionMs(lines: LyricLine[], window: LyricWindow, time: number, offset = 0, lead = 0, min = 700, max = 2400): number {
+  const position = time - offset;
+  const current = window.current >= 0 ? lines[window.current] : undefined;
+  const nextStart = window.next >= 0 ? lines[window.next].start : Infinity;
+  // A sung line is replaced when it ends or the next one starts; in a gap the next line is promoted `lead` early.
+  const nextChange = current ? Math.min(current.end ?? Infinity, nextStart) : nextStart - lead;
+  let ms = Math.min(max, Math.max(min, (nextChange - position) * 600));
+  if (current && current.start > position) ms = Math.min(ms, Math.max(500, (current.start - position) * 1000));
+  return Number.isFinite(ms) ? Math.round(ms) : min;
+}
+
 export function toLrc(lines: LyricLine[]): string {
   const stamp = (seconds: number) => {
     const hundredths = Math.round(seconds * 100);
