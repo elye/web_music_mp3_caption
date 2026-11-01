@@ -141,7 +141,11 @@ kbd { font-family: inherit; font-size: 9px; display: inline-block; padding: 1px 
 .after-lyric { font-size: clamp(15px, 1.5vw, 24px); line-height: 1.5; color: #8d8a83; margin-top: 14px; white-space: pre-line; overflow-wrap: anywhere; }
 .current-lyric.instrumental { font-size: 29px; font-style: italic; font-weight: 400; color: #d7c9b1; }
 .instrumental-notes { display: block; color: #aa9677; margin-bottom: 17px; }
-.lyrics-count-in { display: inline-block; color: #aaa193; font-size: 10px; margin-top: 19px; }
+.lyrics-count-in { display: block; color: #b9ae9c; font-family: 'DM Sans', sans-serif; font-style: normal; font-weight: 500; font-size: 15px; letter-spacing: 0.4px; font-variant-numeric: tabular-nums; margin-top: 16px; }
+.lyrics-content.is-leaving { opacity: 0; transition: opacity 280ms ease-in; pointer-events: none; }
+.lyrics-content.is-entering { animation: stage-fade-in 700ms ease-out backwards; }
+@keyframes stage-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .lyrics-content.is-leaving { transition: none; } .lyrics-content.is-entering { animation: none; } }
 .no-lyrics { max-width: 680px; margin: auto; }
 .no-lyrics > svg { color: #c2a77b; margin: 12px 0 28px; }
 .no-lyrics h3 { font-family: var(--serif); font-size: clamp(28px, 3vw, 48px); font-weight: 400; overflow-wrap: anywhere; text-wrap: balance; }
@@ -283,6 +287,7 @@ select { border: 1px solid #d9cfc0; background: #f9f6ef; color: #75634d; font-si
 .presenting .lyric-stage { border-radius: 0; border: 0; min-height: 0; padding: 30px 55px 20px; box-shadow: none; }
 .presenting .current-lyric { font-size: calc(var(--lyric-size) * 1.45); }
 .presenting .current-lyric.instrumental { font-size: clamp(28px, 4vw, 46px); }
+.presenting .lyrics-count-in { font-size: clamp(18px, 2vw, 26px); margin-top: 20px; }
 .presenting .previous-lyric { font-size: clamp(20px, 2.6vw, 38px); margin-bottom: 45px; }
 .presenting .next-lyric { font-size: clamp(22px, 2.8vw, 40px); margin-top: 45px; }
 .presenting .after-lyric { font-size: clamp(20px, 2.4vw, 34px); margin-top: 22px; }

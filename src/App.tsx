@@ -12,6 +12,7 @@ import { createDemoTrack } from './lib/demo';
 import { usePlayer } from './hooks/usePlayer';
 import { LyricsEditor } from './components/LyricsEditor';
 import { LyricStack } from './components/LyricStack';
+import { FadeThrough } from './components/FadeThrough';
 import { Modal } from './components/Modal';
 import { Settings } from './components/Settings';
 import { TranscriptionDialog } from './components/TranscriptionDialog';
@@ -53,6 +54,8 @@ function App() {
   const lyricMs = active && lyricWin ? lyricTransitionMs(active.lyrics, lyricWin, time, active.offset, lyricLead) : 700;
   const hasLyrics = Boolean(active?.lyrics.some((line) => line.text));
   const isPresenting = fullscreen || stageOnly;
+  // What the stage is showing; when this changes the content fades out and the new content fades in.
+  const stageView = !active ? 'welcome' : gap ? 'gap' : finished ? 'finished' : !hasLyrics ? `bare:${active.id}` : `lyrics:${active.id}`;
   const modalOpen = settingsOpen || editing || Boolean(transcribeIds) || Boolean(removeId);
 
   const notify = useCallback((text: string, kind?: 'error' | 'success') => setNotice({ text, kind }), []);
@@ -326,7 +329,7 @@ function App() {
         <section className={`lyric-stage ${active ? 'has-song' : ''}`} aria-label="Lyrics" style={{ '--lyric-size': `${preferences.fontSize}px` } as CSSProperties}>
           <div className="stage-grain" aria-hidden="true" />
           <div className="stage-topline"><span className="stage-label"><span className={playing && !fading ? 'live-dot live' : 'live-dot'} />{gap ? 'UP NEXT' : !active ? 'THE STAGE IS YOURS' : fading ? 'FADING TO PAUSE' : playing ? 'NOW SINGING' : 'READY WHEN YOU ARE'}</span><div className="stage-top-actions">{active && <span className="stage-song-number">{String(activeIndex + 1).padStart(2, '0')} / {String(tracks.length).padStart(2, '0')}</span>}{isPresenting && <button className="icon-button light" aria-label="Exit fullscreen" onClick={() => void toggleFullscreen()}><Minimize size={20} /></button>}</div></div>
-          <div className="lyrics-content">
+          <FadeThrough viewKey={stageView}>
             {!active ? <div className="welcome-stage"><span className="stage-illustration"><AudioLines size={48} strokeWidth={1.1} /><span /><span /></span><p className="welcome-kicker">GOOD SONGS ARE BETTER SHARED</p><h3>Bring the songs.<br /><em>Sing them together.</em></h3><p>Add your MP3s. Find the words.<br />Let the next song take care of itself.</p><button className="button stage-cta" disabled={!ready} onClick={() => fileInput.current?.click()}><Plus size={17} /> Add your first songs</button><button className="demo-link" disabled={!ready} onClick={addDemo}><Headphones size={14} /> Or try a 32-second soundcheck</button></div>
             : gap ? <div className="gap-content"><span className="countdown">{gap.remaining}</span><p>A little room to breathe.</p><h3>{tracks.find((track) => track.id === gap.nextId)?.title}</h3><button className="button stage-cta" onClick={() => { const next = tracks.find((track) => track.id === gap.nextId); if (next) selectTrack(next, true); }}>Start next song <SkipForward size={15} /></button></div>
             : finished ? <div className="finished-content"><span className="finished-icon"><Check size={32} /></span><p className="welcome-kicker">THAT WAS A LOVELY LITTLE SESSION</p><h3>Every voice.<br /><em>Part of the song.</em></h3><p>You’ve reached the end of your queue.</p><button className="button stage-cta" onClick={() => tracks[0] && selectTrack(tracks[0], true)}><RotateCcw size={16} /> Sing it again</button></div>
@@ -336,7 +339,7 @@ function App() {
               {nextLine ? (time < active.lyrics[0].start + active.offset ? 'The song is about to begin' : 'Let the music breathe') : 'Let the last notes linger'}
               {nextLine && <span className="lyrics-count-in">Words in {Math.max(1, Math.ceil(nextLine.start + active.offset - time))}s</span>}
             </>} />}
-          </div>
+          </FadeThrough>
           <div className="stage-bottomline"><span>{active ? <><Music2 size={13} /> {active.title}</> : <><Waves size={15} /> A space for every voice</>}</span><div className="stage-caption-tools"><button aria-label="Smaller lyrics" disabled={preferences.fontSize <= 32} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.max(32, value.fontSize - 4) }))}>A<span>−</span></button><span className="caption-tool-divider" /><button aria-label="Larger lyrics" disabled={preferences.fontSize >= 88} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.min(88, value.fontSize + 4) }))}>A<span>+</span></button></div></div>
         </section>
         <div className="under-stage"><div className="stage-note"><span className="note-dot" /><span>{hasLyrics ? `${active?.lyrics.filter((line) => line.text).length} lines · ${active?.lyricSource === 'transcribed' ? 'AI lyrics — please review' : 'Timed lyrics ready'}` : 'Big words. Shared moments. No page-turning.'}</span></div><div className="lyric-actions">{active && hasLyrics && <div className="offset-controls"><span>Lyric delay</span><button aria-label="Show lyrics 0.5 seconds earlier" onClick={() => updateTrack({ ...active, offset: Math.max(-30, Math.round((active.offset - 0.5) * 10) / 10) })}>−</button><span className="mono" title="Positive values show lyrics later">{active.offset > 0 ? '+' : ''}{active.offset.toFixed(1)}s</span><button aria-label="Show lyrics 0.5 seconds later" onClick={() => updateTrack({ ...active, offset: Math.min(30, Math.round((active.offset + 0.5) * 10) / 10) })}>+</button></div>}{active && <button className="text-button" onClick={() => setEditing(true)}><FileText size={14} />{hasLyrics ? 'Edit lyrics' : 'Add lyrics'}</button>}</div></div>
