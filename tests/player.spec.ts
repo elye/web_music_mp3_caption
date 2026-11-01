@@ -136,7 +136,7 @@ test('auto-advance countdown can be paused and the queue ends cleanly', async ({
   await expect(page.locator('.track-row')).toHaveCount(2);
 });
 
-test('only transcribes after explicit consent and stores returned captions', async ({ page }) => {
+test('only starts local transcription on request and stores returned captions', async ({ page }) => {
   let transcriptions = 0;
   await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: true } }));
   await page.route('**/api/transcribe', (route) => {
@@ -148,7 +148,7 @@ test('only transcribes after explicit consent and stores returned captions', asy
   await importSongs(page, 5);
   expect(transcriptions).toBe(0);
   await page.locator('.queue-bottom').getByRole('button', { name: 'Generate lyrics' }).click();
-  await expect(page.getByText('Your choice, every time.')).toBeVisible();
+  await expect(page.getByText('On your computer. Not in the cloud.')).toBeVisible();
   expect(transcriptions).toBe(0);
   await page.getByRole('button', { name: 'Transcribe 2 songs' }).click();
   await expect(page.getByText('Finished. Review the words and timing before your session.')).toBeVisible();
@@ -158,13 +158,13 @@ test('only transcribes after explicit consent and stores returned captions', asy
   await expect(page.getByText('2 of 2 songs with lyrics')).toBeVisible();
 });
 
-test('transcription setup is honest and timed subtitle import works without a key', async ({ page }) => {
+test('local model setup is honest and timed subtitle import works without a model', async ({ page }) => {
   await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: false } }));
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
   await importSongs(page);
   await page.locator('.queue-bottom').getByRole('button', { name: 'Generate lyrics' }).click();
-  await expect(page.getByText('One-time setup needed')).toBeVisible();
+  await expect(page.getByText('One-time local setup needed')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Transcribe 2 songs' })).toBeDisabled();
   await page.getByRole('button', { name: 'Not now' }).click();
   await page.locator('.lyric-actions').getByRole('button', { name: 'Add lyrics' }).click();
@@ -247,13 +247,60 @@ test('keyboard controls, lyric delay, and mobile settings stay usable', async ({
 
 test('failed transcription preserves existing lyrics', async ({ page }) => {
   await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: true } }));
-  await page.route('**/api/transcribe', (route) => route.fulfill({ status: 502, json: { error: 'Test provider unavailable' } }));
+  await page.route('**/api/transcribe', (route) => route.fulfill({ status: 500, json: { error: 'Test local worker unavailable' } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Or try a 32-second soundcheck' }).click();
   await page.locator('.queue-bottom').getByRole('button', { name: 'Generate lyrics' }).click();
   await expect(page.getByText('Existing lyrics will be replaced after success.')).toBeVisible();
   await page.getByRole('button', { name: 'Transcribe song' }).click();
-  await expect(page.getByText('Test provider unavailable')).toBeVisible();
+  await expect(page.getByText('Test local worker unavailable')).toBeVisible();
   await page.getByRole('button', { name: 'Not now' }).click();
   await expect(page.getByText('4 lines · Timed lyrics ready')).toBeVisible();
+});
+
+test('detects a newly installed local model without reloading the app', async ({ page }) => {
+  let ready = false;
+  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: ready, model: 'base', local: true } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Or try a 32-second soundcheck' }).click();
+  await page.locator('.queue-bottom').getByRole('button', { name: 'Generate lyrics' }).click();
+  await expect(page.getByText('One-time local setup needed')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Transcribe song' })).toBeDisabled();
+  ready = true;
+  await page.getByRole('button', { name: 'Check again' }).click();
+  await expect(page.getByText('Whisper base · CPU · offline-ready')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Transcribe song' })).toBeEnabled();
+});
+
+test('real browser-to-local-model transcription works with external requests blocked', async ({ page }) => {
+  test.skip(process.env.CHORUS_TEST_LOCAL !== '1', 'Set CHORUS_TEST_LOCAL=1 after local setup to exercise the real model.');
+  test.skip(process.platform !== 'darwin', 'The spoken test fixture uses an installed macOS voice.');
+  test.setTimeout(120000);
+  const directory = mkdtempSync(join(tmpdir(), 'chorus-offline-browser-'));
+  const external: string[] = [];
+  try {
+    execFileSync('/usr/bin/say', ['-v', 'Samantha', '-o', join(directory, 'voice.aiff'), 'We can sing together. Every voice has a place in this song.'], { stdio: 'pipe' });
+    execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', join(directory, 'voice.aiff'), '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', join(directory, 'voice.wav')], { stdio: 'pipe' });
+    await page.route('**/*', (route) => {
+      const url = new URL(route.request().url());
+      if (!['127.0.0.1', 'localhost'].includes(url.hostname)) { external.push(url.href); return route.abort(); }
+      return route.continue();
+    });
+    const response = await page.goto('http://127.0.0.1:3001/');
+    expect(response?.headers()['content-security-policy']).toContain("connect-src 'self'");
+    await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
+    await page.locator('input[type=file]').first().setInputFiles({ name: 'Local voice.wav', mimeType: 'audio/wav', buffer: readFileSync(join(directory, 'voice.wav')) });
+    await expect(page.locator('.track-row')).toHaveCount(1);
+    await page.locator('.queue-bottom').getByRole('button', { name: 'Generate lyrics' }).click();
+    await expect(page.getByText('Whisper base · CPU · offline-ready')).toBeVisible();
+    await page.getByRole('button', { name: 'Transcribe song' }).click();
+    await expect(page.getByText('Finished. Review the words and timing before your session.')).toBeVisible({ timeout: 90000 });
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(page.getByText('1 of 1 songs with lyrics')).toBeVisible();
+    await page.getByRole('button', { name: 'Edit lyrics' }).click();
+    await expect(page.getByLabel('Timed lyrics')).toHaveValue(/voice|sing|song/i);
+    expect(external).toEqual([]);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.screenshot({ path: 'test-results/screenshots/local-transcription.png', fullPage: true });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

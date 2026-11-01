@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeLyricIndex, formatTime, nextLyricIndex, normalizeLyrics, parseLrc, parseSrt, titleFromFilename, toLrc } from './lyrics';
+import { activeLyricIndex, formatTime, nextLyricIndex, normalizeLyrics, parseLrc, parseSrt, parseVtt, titleFromFilename, toLrc } from './lyrics';
 import { softenedGain } from './audio';
 import { encodeWav } from './transcription';
 
@@ -18,6 +18,36 @@ describe('timed lyrics', () => {
   it('reads SRT timestamps, removes presentation tags, and preserves gaps', () => {
     expect(parseSrt('1\r\n00:00:02,500 --> 00:00:05,000\r\n<i>Hello</i>\r\nworld\r\n\r\n2\r\n00:01:00,000 --> 00:01:03,500\r\nAgain')).toEqual([
       { start: 2.5, end: 5, text: 'Hello world' }, { start: 60, end: 63.5, text: 'Again' },
+    ]);
+  });
+  it('parses YouTube WebVTT headers, cue settings, inline tags, and word timestamps', () => {
+    const input = String.fromCharCode(0xfeff) + `WEBVTT
+Kind: captions
+Language: en
+
+00:00:01.200 --> 00:00:03.500 align:start position:0%
+<c>Welcome &amp; sing</c>
+
+00:00:03.500 --> 00:00:05.000
+<c.colorCCCCCC>to the music</c><00:00:04.000><c> tonight</c>`;
+    expect(parseVtt(input)).toEqual([
+      { start: 1.2, end: 3.5, text: 'Welcome & sing' },
+      { start: 3.5, end: 5, text: 'to the music tonight' },
+    ]);
+  });
+  it('parses hour timestamps and ignores malformed or non-cue blocks', () => {
+    expect(parseVtt(`WEBVTT
+
+NOTE generated captions
+ignored
+
+intro
+01:02:03.004 --> 01:02:05.000
+Hello
+
+00:60.000 --> 01:01.000
+Invalid`)).toEqual([
+      { start: 3723.004, end: 3725, text: 'Hello' },
     ]);
   });
   it('finds the right line at exact boundaries and during instrumental gaps', () => {

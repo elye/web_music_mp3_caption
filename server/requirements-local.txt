@@ -1,0 +1,5 @@
+# Installed into the project-local virtual environment, never global Python.
+faster-whisper==1.2.1
+huggingface-hub==0.36.0
+# Newer PyAV releases remove an argument used by this faster-whisper version.
+av==16.0.1

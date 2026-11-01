@@ -7,6 +7,8 @@
     "dev": "concurrently -k -n api,web -c yellow,cyan \"node server/index.mjs\" \"vite --host 127.0.0.1\"",
     "build": "tsc -b && vite build",
     "start": "node server/index.mjs",
+    "setup:local": "node scripts/setup-local.mjs",
+    "test:local": "node --test server/local-transcriber.integration.mjs",
     "test": "vitest run src && node --test server/*.test.mjs",
     "test:e2e": "playwright test",
     "check": "tsc -b && npm test"

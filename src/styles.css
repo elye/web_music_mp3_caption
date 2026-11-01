@@ -249,6 +249,10 @@ select { border: 1px solid #d9cfc0; background: #f9f6ef; color: #75634d; font-si
 .info-card p, .privacy-note p { font-size: 11px; line-height: 1.8; color: #8b7c64; }
 .info-card strong, .privacy-note strong { color: #6e5c40; font-weight: 600; }
 .privacy-note { margin-top: 0; }
+.local-model-status { margin: 16px 0 0; color: #66784d; font-size: 11px; }
+.local-model-status > span { display: flex; align-items: center; gap: 6px; }
+.local-model-status p { margin-top: 10px; color: #8b7c64; line-height: 1.7; }
+.setup-note .button { margin-top: 10px; }
 .shortcut-list { padding-top: 25px; }
 .shortcut-list h3 { font-size: 11px; font-weight: 600; margin-bottom: 15px; }
 .shortcut-list > div { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; font-size: 11px; color: #91816b; }

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Download, FileUp, Play, Pause, Timer, Check } from 'lucide-react';
 import type { Track } from '../types';
-import { formatTime, parseLrc, parseSrt, toLrc } from '../lib/lyrics';
+import { formatTime, parseLrc, parseSrt, parseVtt, toLrc } from '../lib/lyrics';
 import { Modal } from './Modal';
 
 export function LyricsEditor({ track, time, playing, onToggle, onSave, onClose }: {
@@ -21,8 +21,8 @@ export function LyricsEditor({ track, time, playing, onToggle, onSave, onClose }
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) { setError('Lyrics files must be smaller than 2 MB.'); return; }
     const content = await file.text();
-    if (/\.srt$/i.test(file.name)) {
-      const parsed = parseSrt(content);
+    if (/\.(srt|vtt)$/i.test(file.name)) {
+      const parsed = /\.vtt$/i.test(file.name) ? parseVtt(content) : parseSrt(content);
       if (!parsed.length) { setError('No valid subtitle timestamps found in this file.'); return; }
       setText(toLrc(parsed));
     } else setText(content);
@@ -64,9 +64,9 @@ export function LyricsEditor({ track, time, playing, onToggle, onSave, onClose }
       <label>Artist / note<input value={artist} onChange={(e) => setArtist(e.target.value)} maxLength={160} placeholder="Optional" /></label>
     </div>
     <div className="editor-toolbar">
-      <button className="button secondary small" onClick={() => input.current?.click()}><FileUp size={16} /> Import .lrc / .srt / .txt</button>
+      <button className="button secondary small" onClick={() => input.current?.click()}><FileUp size={16} /> Import .lrc / .srt / .vtt / .txt</button>
       <button className="button ghost small" onClick={download} disabled={!lines.length}><Download size={16} /> Export LRC</button>
-      <input ref={input} type="file" hidden accept=".lrc,.srt,.txt" onChange={(e) => { void importFile(e.target.files?.[0]); e.target.value = ''; }} />
+      <input ref={input} type="file" hidden accept=".lrc,.srt,.vtt,.txt" onChange={(e) => { void importFile(e.target.files?.[0]); e.target.value = ''; }} />
     </div>
     <label className="sr-only" htmlFor="lyrics-input">Timed lyrics</label>
     <textarea ref={textarea} id="lyrics-input" className="lyrics-editor" spellCheck={false} value={text} onChange={(e) => { setText(e.target.value); setError(''); }} placeholder={'[00:08.00]The first line of your song\n[00:14.50]And the next line goes here\n\nOr paste plain lyrics, play the song,\nand stamp each line when it begins.'} />

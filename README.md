@@ -1,17 +1,22 @@
 # Chorus — sing together
 
-A local-first sing-along web app for small groups. Bring a few MP3s, prepare the words, and let the queue carry the evening. Built with React, TypeScript, Vite, Web Audio, IndexedDB, and a small Express transcription API.
+An **entirely local** sing-along app for small groups: local MP3s, local storage, and local Whisper transcription. Nothing is sent to a cloud service. A loopback-only helper runs on the same computer as the browser; there is no hosted backend, API key, or paid transcription service.
+
+Built with React, TypeScript, Vite, Web Audio, IndexedDB, Express, and CPU-only `faster-whisper`.
 
 ## Run it
 
-Requires **Node.js 22+** and **pnpm**.
+Requires **Node.js 22+**, **pnpm**, and **Python 3.10–3.13** for transcription. No GPU or system FFmpeg installation is required for the app; the Python audio library bundles decoding support.
 
 ```sh
 pnpm install
+pnpm setup:local       # One-time dependency + multilingual base model download
 pnpm dev
 ```
 
-Open **http://127.0.0.1:5173**. The dev command starts both Vite and the local API (port 3001). Restart it after changing server code or environment variables; frontend changes hot-reload. Keep the same hostname and port to retain access to your browser's saved queue.
+Open **http://127.0.0.1:5173**. The dev command starts Vite and the **localhost-only** helper (port 3001). After setup, disconnect from the internet: playback, transcription, editing, and lyric export still work. Only the initial installation/model download needs internet; see the air-gapped setup below for machines that cannot connect at all.
+
+You may skip `setup:local` if you only want playback and imported/manual lyrics. Restart after changing server code or environment variables; frontend changes hot-reload. Keep the same hostname and port to retain access to your browser's saved queue.
 
 For a production build served locally:
 
@@ -20,7 +25,7 @@ pnpm build
 pnpm start
 ```
 
-Open **http://127.0.0.1:3001**. The app and API are both served by Express. The production address has its own browser storage, separate from the development address.
+Open **http://127.0.0.1:3001**. Express serves the built app and local transcription endpoint on loopback. This is the simplest offline day-to-day mode; the production page's Content Security Policy blocks remote connections. The production address has its own browser storage, separate from the development address.
 
 ## What it does
 
@@ -51,7 +56,7 @@ Shortcuts do not intercept typing or focused native controls. Range inputs suppo
 
 ### 1. Import timed lyrics — no API or internet required
 
-Choose a song, click **Add lyrics**, then import an `.lrc` or `.srt` file. You can edit the words/times and export an `.lrc` backup.
+Choose a song, click **Add lyrics**, then import an `.lrc`, `.srt`, or `.vtt` file, including YouTube WebVTT captions. Conversion happens in your browser. You can edit the words/times and export an `.lrc` backup.
 
 Example LRC:
 
@@ -62,32 +67,69 @@ Example LRC:
 [00:24.00]A line after the instrumental break
 ```
 
-Repeated timestamps and `[offset:milliseconds]` metadata are supported. SRT end times are converted into blank timed lines to preserve instrumental gaps.
+Repeated timestamps and `[offset:milliseconds]` metadata are supported. SRT and WebVTT end times are converted into blank timed lines to preserve instrumental gaps.
 
 ### 2. Time your own lyrics
 
 Paste one plain lyric line per row in the editor. Play the song and press **Stamp next line** when each line starts. Save when all lines have timestamps. Edit timestamps directly for corrections. Song title and artist/note are editable too.
 
-### 3. Generate lyrics automatically — optional, paid provider
+### 3. Generate lyrics automatically — on your computer
 
-1. Copy `.env.example` to `.env`.
-2. Set `OPENAI_API_KEY` to your OpenAI API key. Do not add a `VITE_` prefix: the key belongs only on the server.
-3. Restart `pnpm dev` (or `pnpm start`).
-4. Click **Generate lyrics**, review the upload notice, then click **Transcribe**.
+After `pnpm setup:local`, choose **Generate lyrics → Transcribe**. The dialog shows the installed model and offline-ready status. If you finish setup while the app is open, click **Check again**; no application restart is needed just to detect the model.
 
-The queue-wide button processes tracks missing lyrics. If every track already has lyrics, the dialog explicitly offers to replace them. Successful results are saved per song; a failed or cancelled request never erases existing lyrics. You can stop processing and retry unfinished songs.
+The queue-wide button processes tracks missing lyrics. If every track already has lyrics, the dialog offers to replace them. Successful results are saved per song; a failed or cancelled request never erases existing lyrics. You can stop processing and retry unfinished songs.
 
-**Important limitations and privacy details:**
+**What runs where:**
 
-- No audio is uploaded until you explicitly click **Transcribe**. Normal playback, local fonts, imported captions, and editing do not need an external connection.
-- Automatic transcription sends audio to **OpenAI Whisper (`whisper-1`)**. Provider usage charges and OpenAI's data handling policies apply. Review those policies before uploading private recordings.
-- The browser decodes audio to mono PCM and uploads it in six-minute chunks (approximately 11 MB at 16 kHz). The server forwards it to a fixed provider endpoint. It does not intentionally write audio or API keys to disk or log audio/transcripts.
-- Automatic transcription currently supports songs up to **20 minutes**, to limit browser memory use. Longer tracks can still play with imported timed lyrics.
-- Whisper is a speech recognizer, not a dedicated music alignment system. Backing instruments, reverberation, overlapping vocals, and instrumental sections can cause missing or invented words. **Review and correct the generated lyrics and timing before a gathering.** Chunk boundaries can split phrases.
-- Captions synchronize **by line/segment**, not by individual highlighted word. Some language recognition and segment breaks will need manual correction.
-- API requests have a 24 MB upload limit, a three-minute provider timeout, a one-request-at-a-time limit, and a local limit of 30 requests per 15 minutes. Each chunk counts as a request. Processing stops on the first failed chunk for that song.
-- Cancelling stops further uploads and aborts the current request where possible; it cannot undo data already sent or guaranteedly cancel provider charges.
-- Only upload and display songs/lyrics you have permission to use.
+1. Your browser reads the local MP3, resamples it to mono PCM, and sends six-minute chunks over **loopback only**, to `127.0.0.1` on the same computer.
+2. The helper starts a local Python worker. `faster-whisper` reads the installed model from disk and transcribes on your CPU using int8 inference.
+3. Timed lines return to your browser and are saved in IndexedDB. No external service receives the audio, lyrics, or metadata.
+
+**Offline guarantees and boundaries:**
+
+- Runtime model loading uses a **local directory only**, `local_files_only=True`, `HF_HUB_OFFLINE=1`, and `TRANSFORMERS_OFFLINE=1`. Telemetry is disabled. The worker also rejects Python socket connections and DNS lookups. Missing files produce a setup error, never a download or cloud fallback.
+- Only the explicitly invoked **setup script** accesses package/model registries. It downloads public packages and models, not your songs. No API key is needed.
+- Runtime/model files live under the git-ignored `.local-transcription/` folder. Python packages are isolated in its `venv/`; global Python is not modified.
+- For processing, private temporary WAV files are written under `.local-transcription/tmp/` with restrictive permissions on POSIX. They are removed after success, failure, or normal cancellation. Abrupt computer/process termination can leave temporary files there; delete stale contents when the app is stopped. This is ordinary local disk storage, not encrypted storage.
+- One worker runs at a time to avoid exhausting your computer. Cancellation terminates it and keeps the slot occupied until it actually exits. There is no paid usage limit. The default timeout is 20 minutes **per chunk**, not per whole song.
+- Automatic transcription supports songs up to **20 minutes** to limit browser memory use. Longer tracks still play with imported lyrics. Local processing can be slower than playback, particularly on older CPUs; prepare the queue before the gathering.
+- Whisper recognizes speech, not perfectly aligned singing. Backing instruments, overlapping vocals, reverberation, and instrumental breaks can produce missing or invented lyrics. **Review and correct the words and timing.** Captions are line/segment-timed, not word-highlighted. Chunk boundaries can split phrases.
+- Only use songs/lyrics you have permission to display.
+
+### Choose a local model
+
+```sh
+pnpm setup:local --model tiny    # ~75 MB; fastest, least accurate
+pnpm setup:local --model base    # ~145 MB; default, practical CPU starting point
+pnpm setup:local --model small   # ~490 MB; potentially better recognition, more CPU/RAM
+pnpm setup:local --model medium  # ~1.5 GB; substantially more CPU/RAM
+```
+
+All choices are multilingual. Setup verifies offline model loading, WAV decoding, and a short inference before selecting the model; failed setup does not replace a previously selected model. Model weights remain on disk for later offline use. Recognition quality on songs is not guaranteed even with larger models.
+
+Optional `.env` settings are described in `.env.example`: CPU thread count (default 4), worker timeout, a previously downloaded model, or an existing compatible Python executable. No credentials are used.
+
+### Prepare a completely disconnected machine
+
+Use a connected computer with the **same OS, CPU architecture, and Python minor version** as the target:
+
+1. Run `pnpm install`, `pnpm setup:local --model base`, and `pnpm build`.
+2. Prepare Python wheels (using the Python environment created above):
+
+   ```sh
+   .local-transcription/venv/bin/python -m pip download -r server/requirements-local.txt --dest offline-wheels
+   ```
+
+   On Windows, use `.local-transcription/venv/Scripts/python.exe` instead.
+3. Copy the project, including `dist/`, `node_modules/`, `.local-transcription/models/`, and `offline-wheels/`, to the disconnected computer. Include its source files and package files. Do **not** rely on copying the virtual environment: virtual environments contain machine-specific paths. Install Node, pnpm, and a matching Python on the target in advance.
+4. On the disconnected computer:
+
+   ```sh
+   pnpm setup:local --offline --wheels ./offline-wheels --model base
+   pnpm start
+   ```
+
+The `--offline` flag uses pip's `--no-index`, never calls the model registry, and fails if required files are missing. This can also verify an already-installed environment: `pnpm setup:local --offline`. Keep all model files, including the tokenizer and vocabulary; copying just `model.bin` is not enough.
 
 ## Local storage and deployment boundaries
 
@@ -95,21 +137,24 @@ Audio blobs, lyrics, and order are saved in **IndexedDB** under the browser orig
 
 The server binds to **127.0.0.1**, not your network interfaces. The shipped app is intended to run on the leader's computer and project/mirror that screen. It does **not** synchronize separate audience devices.
 
-This is **not a public multi-user service**. Before exposing it on a network, add authentication, per-user quotas, HTTPS, appropriate retention controls, and a production reverse proxy. `APP_ORIGIN` can restrict the allowed browser origin; it is not authentication. For a custom local port, update `PORT`, the Vite proxy, and `APP_ORIGIN` consistently.
+This is **not a public multi-user service**, and it should not be exposed through a tunnel or reverse proxy. The API rejects non-local browser origins, and the frontend refuses transcription from non-loopback hostnames. Anyone using it runs their own local instance and model. For a custom local port, update `PORT` and the Vite proxy consistently. It is not a browser-only app: keep the localhost helper running on the same computer. A phone opening another computer's server would not be on-device transcription and is intentionally not the supported mode.
 
 Modern desktop Chrome/Edge is the primary tested target. Safari/mobile browser policies can restrict autoplay, fullscreen, wake locks, background playback, and large audio decoding. The first playback requires a user gesture. A focused stage fallback is available when native fullscreen is denied. Fonts are bundled locally; the app needs its local server running, but playback does not need internet once dependencies are installed.
 
 ## Tests
 
 ```sh
-pnpm test        # Lyric parsing/timing, audio encoding, and API tests
+pnpm test        # Lyric parsing/timing, local-worker lifecycle, and API tests
 pnpm build       # Type-check and production bundle
 pnpm test:e2e    # Playwright browser acceptance tests
+pnpm test:local  # Real installed-model inference + offline worker checks
+# On macOS with a local Samantha voice and ffmpeg, after building:
+CHORUS_TEST_LOCAL=1 pnpm test:e2e  # Also test the built app with real local transcription
 ```
 
-Browser tests use the installed Google Chrome on macOS if found; otherwise install Playwright Chromium using `pnpm exec playwright install chromium`. An optional real-MP3 smoke test uses `ffmpeg` when installed; the rest generate small WAV fixtures. Tests use temporary browser profiles and synthetic audio, not your personal files. The transcription provider is mocked in tests, so testing does not upload audio or incur charges.
+Browser tests use installed Google Chrome on macOS if found; otherwise install Playwright Chromium with `pnpm exec playwright install chromium` during initial setup. An optional real-MP3 smoke test uses `ffmpeg`; the app itself does not require it. Browser/API tests use synthetic audio and a test local worker, never a cloud provider. `test:local` runs actual model inference, verifies the worker's network guard, and on macOS tests recognition of a locally synthesized voice if `say` and `ffmpeg` are available. It requires `setup:local` to have completed; it never installs/downloads a model itself.
 
-Browser coverage includes empty/mobile layouts, no external requests during normal use, import/persistence/reordering, safe removal, lyric edits and SRT import, caption sizing, fade/resume behavior, soften/restore/mute, fullscreen, sequential playback, paused countdowns, explicit transcription consent, unavailable-provider setup, and real MP3 decoding. Screenshots and traces are written to the ignored `test-results/` folder.
+Coverage includes local-only requests, setup/retry UX, cleanup and cancellation, busy-worker protection, queue persistence, fade/soften/mute, fullscreen, timed lyrics, automatic transitions, repeat, mobile layouts, and MP3 decoding. Screenshots and traces are in the ignored `test-results/` folder.
 
 ## Project map
 
@@ -117,12 +162,15 @@ Browser coverage includes empty/mobile layouts, no external requests during norm
 src/App.tsx                     Session UI and queue orchestration
 src/styles.css                  Responsive stage, player, and dialogs
 src/lib/audio.ts                Persistent audio element and gain ramps
-src/lib/lyrics.ts               LRC/SRT parsing, export, lyric lookup
+src/lib/lyrics.ts               LRC/SRT/WebVTT parsing, export, lyric lookup
 src/lib/storage.ts              IndexedDB audio/lyrics and local preferences
 src/lib/transcription.ts        Audio preparation and transcription chunks
 src/lib/demo.ts                 Original synthesized soundcheck
 src/components/LyricsEditor.tsx Import, edit, timestamp, export
 src/components/TranscriptionDialog.tsx  Consent and batch progress
-server/app.mjs                  Bounded, server-side transcription proxy
-server/index.mjs                API and production static server
+server/app.mjs                  Loopback-only local transcription endpoint
+server/local-transcriber.mjs    Worker lifecycle, cancellation, temporary-file cleanup
+server/transcribe_local.py      Offline-only CPU Whisper inference
+scripts/setup_local.py          Explicit one-time download / air-gapped setup
+server/index.mjs                Localhost app server with local-only production CSP
 ```

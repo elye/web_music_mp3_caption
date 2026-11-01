@@ -24,6 +24,9 @@ export async function transcribeTrack(
   onProgress: (message: string) => void,
   language = '',
 ): Promise<LyricLine[]> {
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname)) {
+    throw new Error('Local transcription must run from localhost on your computer. Start Chorus locally, then open http://127.0.0.1:3001.');
+  }
   if (track.duration > 20 * 60) throw new Error('Automatic transcription currently supports songs up to 20 minutes. Import timed lyrics for longer audio.');
   onProgress('Preparing audio on this device…');
   const context = new AudioContext({ sampleRate: 16000 });
@@ -42,15 +45,15 @@ export async function transcribeTrack(
   const lyrics: LyricLine[] = [];
   for (let i = 0; i < total; i++) {
     signal.throwIfAborted();
-    onProgress(`Transcribing part ${i + 1} of ${total}…`);
+    onProgress(`Transcribing locally · part ${i + 1} of ${total}…`);
     const start = i * chunkSize;
     const body = new FormData();
     body.append('audio', encodeWav(mono.subarray(start, start + chunkSize), decoded.sampleRate), 'song.wav');
     if (language) body.append('language', language);
     const response = await fetch('/api/transcribe', { method: 'POST', body, signal });
-    const result = await response.json().catch(() => ({ error: 'The transcription server returned an unexpected response.' }));
+    const result = await response.json().catch(() => ({ error: 'The localhost helper returned an unexpected response.' }));
     if (!response.ok) throw new Error(result.error || 'Transcription failed.');
-    if (!Array.isArray(result.lyrics)) throw new Error('The server returned no usable timestamps.');
+    if (!Array.isArray(result.lyrics)) throw new Error('The local worker returned no usable timestamps.');
     lyrics.push(...result.lyrics.map((line: LyricLine) => ({ ...line, start: line.start + start / decoded.sampleRate, end: line.end === undefined ? undefined : line.end + start / decoded.sampleRate })));
   }
   const normalized = normalizeLyrics(lyrics);

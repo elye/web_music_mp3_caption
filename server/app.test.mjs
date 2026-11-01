@@ -1,7 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { setTimeout as wait } from 'node:timers/promises';
 import { createApp } from './app.mjs';
+
+const ready = { transcriptionAvailable: true, engine: 'faster-whisper', model: 'base', local: true };
+const worker = (transcribe = async () => ({ lyrics: [] })) => ({ status: async () => ready, transcribe });
 
 async function withServer(options, run) {
   const server = createApp(options).listen(0, '127.0.0.1');
@@ -9,59 +13,84 @@ async function withServer(options, run) {
   try { await run(`http://127.0.0.1:${server.address().port}`); }
   finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 }
-const body = (type = 'audio/wav') => {
+const body = (type = 'audio/wav', valid = true) => {
   const form = new FormData();
-  form.append('audio', new Blob(['audio test fixture'], { type }), 'song.wav');
+  const buffer = Buffer.alloc(48);
+  if (valid) { buffer.write('RIFF'); buffer.write('WAVE', 8); }
+  form.append('audio', new Blob([buffer], { type }), 'song.wav');
   return form;
 };
 
-test('status does not expose credentials and missing key disables transcription', async () => {
-  await withServer({ apiKey: '' }, async (url) => {
+test('missing local model disables transcription; there is no credential or cloud fallback', async () => {
+  await withServer({ transcriber: { status: async () => ({ ...ready, transcriptionAvailable: false }), transcribe: () => assert.fail('Must not run') } }, async (url) => {
     const result = await fetch(`${url}/api/status`).then((r) => r.json());
-    assert.deepEqual(result, { transcriptionAvailable: false, provider: 'OpenAI Whisper' });
-    const response = await fetch(`${url}/api/transcribe`, { method: 'POST', body: body() });
-    assert.equal(response.status, 503);
+    assert.equal(result.transcriptionAvailable, false);
+    assert.equal(result.local, true);
+    assert.equal((await fetch(`${url}/api/transcribe`, { method: 'POST', body: body() })).status, 503);
   });
 });
 
-test('transcription sends audio to the fixed provider and returns clean timed lines', async () => {
+test('passes local audio to a local worker, validates timestamps, and preserves language', async () => {
   let requests = 0;
-  await withServer({ apiKey: 'test-key', fetchImpl: async (url, options) => {
+  await withServer({ transcriber: worker(async ({ buffer, language, signal }) => {
     requests++;
-    assert.equal(url, 'https://api.openai.com/v1/audio/transcriptions');
-    assert.equal(options.headers.Authorization, 'Bearer test-key');
-    assert.equal(options.body.get('model'), 'whisper-1');
-    assert.equal(options.body.get('response_format'), 'verbose_json');
-    return Response.json({ segments: [{ start: 1, end: 3, text: ' Hello ' }, { start: -2, end: 0, text: 'bad' }] });
-  } }, async (url) => {
-    const response = await fetch(`${url}/api/transcribe`, { method: 'POST', body: body() });
+    assert.equal(buffer.toString('ascii', 0, 4), 'RIFF');
+    assert.equal(language, 'en');
+    assert.equal(signal.aborted, false);
+    return { lyrics: [{ start: 1, end: 3, text: ' Hello ' }, { start: -2, end: 0, text: 'bad' }], language };
+  }) }, async (url) => {
+    const audio = body(); audio.append('language', 'en');
+    const response = await fetch(`${url}/api/transcribe`, { method: 'POST', body: audio });
     assert.equal(response.status, 200);
-    assert.deepEqual((await response.json()).lyrics, [{ start: 1, end: 3, text: 'Hello' }]);
+    assert.deepEqual(await response.json(), { lyrics: [{ start: 1, end: 3, text: 'Hello' }], language: 'en', local: true });
     assert.equal(requests, 1);
   });
 });
 
-test('blocks foreign browser origins before reaching the provider', async () => {
-  await withServer({ apiKey: 'test-key', fetchImpl: () => { throw new Error('Must not run'); } }, async (url) => {
+test('rejects foreign browser origins before invoking the worker', async () => {
+  await withServer({ transcriber: worker(() => assert.fail('Must not run')) }, async (url) => {
     const response = await fetch(`${url}/api/transcribe`, { method: 'POST', headers: { Origin: 'https://untrusted.example' }, body: body() });
     assert.equal(response.status, 403);
   });
 });
 
-test('validates file types and sanitizes provider errors', async () => {
-  await withServer({ apiKey: 'test-key', fetchImpl: async () => new Response('private provider error details', { status: 401 }) }, async (url) => {
+test('validates type and WAV signature, releases busy slot after invalid input, and sanitizes errors', async () => {
+  await withServer({ transcriber: worker(() => { throw new Error('Private absolute path or internals'); }) }, async (url) => {
     assert.equal((await fetch(`${url}/api/transcribe`, { method: 'POST', body: body('text/plain') })).status, 400);
+    assert.equal((await fetch(`${url}/api/transcribe`, { method: 'POST', body: body('audio/wav', false) })).status, 400);
+    assert.equal((await fetch(`${url}/api/transcribe`, { method: 'POST', body: new FormData() })).status, 400);
     const response = await fetch(`${url}/api/transcribe`, { method: 'POST', body: body() });
-    assert.equal(response.status, 502);
-    const message = (await response.json()).error;
-    assert.match(message, /key is invalid/);
-    assert.ok(!message.includes('private'));
+    assert.equal(response.status, 500);
+    assert.ok(!(await response.json()).error.includes('Private'));
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).busy, false);
   });
 });
 
-test('rejects a missing audio file and accepts the configured app origin', async () => {
-  await withServer({ apiKey: 'test-key', origin: 'https://private.example' }, async (url) => {
-    const response = await fetch(`${url}/api/transcribe`, { method: 'POST', headers: { Origin: 'https://private.example' }, body: new FormData() });
-    assert.equal(response.status, 400);
+test('accepts local browser origins', async () => {
+  await withServer({ transcriber: worker() }, async (url) => {
+    const response = await fetch(`${url}/api/transcribe`, { method: 'POST', headers: { Origin: 'http://127.0.0.1:5173' }, body: body() });
+    assert.equal(response.status, 200);
+  });
+});
+
+test('cancelled jobs remain busy until the worker has actually exited', async () => {
+  let signal;
+  let release;
+  let started;
+  const began = new Promise((resolve) => { started = resolve; });
+  const exited = new Promise((resolve) => { release = resolve; });
+  await withServer({ transcriber: worker(async (input) => { signal = input.signal; started(); await exited; return { lyrics: [] }; }) }, async (url) => {
+    const abort = new AbortController();
+    const request = fetch(`${url}/api/transcribe`, { method: 'POST', body: body(), signal: abort.signal }).catch(() => {});
+    await began;
+    abort.abort();
+    await wait(50);
+    assert.equal(signal.aborted, true);
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).busy, true);
+    assert.equal((await fetch(`${url}/api/transcribe`, { method: 'POST', body: body() })).status, 429);
+    release();
+    await request;
+    await wait(20);
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).busy, false);
   });
 });

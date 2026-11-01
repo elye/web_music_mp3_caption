@@ -26,7 +26,6 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [transcribeIds, setTranscribeIds] = useState<string[] | null>(null);
-  const [transcriptionAvailable, setTranscriptionAvailable] = useState<boolean | null>(null);
   const [removeId, setRemoveId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; kind?: 'error' | 'success' } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -38,6 +37,7 @@ function App() {
   const dragDepth = useRef(0);
   const transitionTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const importLock = useRef(false);
+  const orderLock = useRef(false);
   const { engine, time, duration, playing, fading } = usePlayer();
   const active = tracks.find((track) => track.id === activeId);
   const activeIndex = tracks.findIndex((track) => track.id === activeId);
@@ -82,9 +82,6 @@ function App() {
       setTracks(saved);
       if (saved[0]) selectTrack(saved[0]);
     }).catch(() => { if (live) storageError(); }).finally(() => { if (live) setReady(true); });
-    void fetch('/api/status').then((response) => response.ok ? response.json() : Promise.reject()).then((data) => {
-      if (live) setTranscriptionAvailable(data.transcriptionAvailable === true);
-    }).catch(() => { if (live) setTranscriptionAvailable(null); });
     return () => { live = false; clearInterval(transitionTimer.current); };
   }, [selectTrack, storageError]);
 
@@ -244,12 +241,18 @@ function App() {
     } finally { importLock.current = false; setAdding(false); }
   }
 
-  function moveTrack(index: number, direction: number) {
-    const updated = [...tracks];
+  async function moveTrack(index: number, direction: number) {
     const destination = index + direction;
-    if (destination < 0 || destination >= tracks.length) return;
+    if (orderLock.current || destination < 0 || destination >= tracks.length) return;
+    orderLock.current = true;
+    const updated = [...tracks];
     [updated[index], updated[destination]] = [updated[destination], updated[index]];
-    setTracks(updated);
+    const positions = new Map(updated.map((track, position) => [track.id, position]));
+    try {
+      // Commit before displaying the new order, so an immediate reload cannot undo it.
+      await storeOrder(updated.map((track) => track.id)).catch(storageError);
+      setTracks((current) => [...current].sort((a, b) => (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity)));
+    } finally { orderLock.current = false; }
   }
 
   function confirmRemove() {
@@ -310,8 +313,8 @@ function App() {
         </ol>
         {!tracks.length && <div className="empty-queue"><ListMusic size={25} strokeWidth={1.3} /><p>One song or a whole evening.<br /> We’ll keep the music moving.</p></div>}
         <div className="queue-bottom">
-          <button className="button transcription-button" disabled={!tracks.length} onClick={() => setTranscribeIds(tracks.filter((track) => !track.lyrics.length).map((track) => track.id).length ? tracks.filter((track) => !track.lyrics.length).map((track) => track.id) : tracks.map((track) => track.id))}><Sparkles size={17} /><span>Generate lyrics</span><span className="ai-label">AI</span></button>
-          <p className="privacy-caption"><ShieldCheck size={13} /> Songs stay here unless you transcribe.</p>
+          <button className="button transcription-button" disabled={!tracks.length} onClick={() => setTranscribeIds(tracks.filter((track) => !track.lyrics.length).map((track) => track.id).length ? tracks.filter((track) => !track.lyrics.length).map((track) => track.id) : tracks.map((track) => track.id))}><Sparkles size={17} /><span>Generate lyrics</span><span className="ai-label">LOCAL</span></button>
+          <p className="privacy-caption"><ShieldCheck size={13} /> Music & transcription stay on this computer.</p>
         </div>
       </aside>
 
@@ -350,7 +353,7 @@ function App() {
     {dragging && !modalOpen && <div className="drop-overlay"><Upload size={48} /><h2>Good songs belong here.</h2><p>Drop your audio files to add them to the queue.</p></div>}
     {settingsOpen && <Settings preferences={preferences} onChange={setPreferences} onClose={() => setSettingsOpen(false)} />}
     {editing && active && <LyricsEditor track={active} time={time} playing={playing && !fading} onToggle={togglePlayback} onSave={updateTrack} onClose={() => setEditing(false)} />}
-    {transcribeIds && <TranscriptionDialog tracks={tracks.filter((track) => transcribeIds.includes(track.id))} available={transcriptionAvailable} onSave={saveTranscription} onClose={() => setTranscribeIds(null)} />}
+    {transcribeIds && <TranscriptionDialog tracks={tracks.filter((track) => transcribeIds.includes(track.id))} onSave={saveTranscription} onClose={() => setTranscribeIds(null)} />}
     {removeId && <Modal title="Remove this song?" subtitle={tracks.find((track) => track.id === removeId)?.title} onClose={() => setRemoveId(null)}><p className="remove-explanation">This removes the song and its saved lyrics from this browser’s queue. It does not delete your original audio file.</p><footer className="modal-footer"><button className="button secondary" onClick={() => setRemoveId(null)}>Keep song</button><button className="button danger" onClick={confirmRemove}><Trash2 size={16} /> Remove song</button></footer></Modal>}
     {isPresenting && <button className="presenting-hint" onClick={() => void toggleFullscreen()}><ChevronDown size={15} /> Back to your room</button>}
   </div>;

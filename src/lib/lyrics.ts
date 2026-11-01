@@ -42,6 +42,45 @@ export function parseSrt(input: string): LyricLine[] {
   return normalizeLyrics(lines);
 }
 
+/** Read WebVTT cues, including YouTube cue settings and inline word-timing tags. */
+export function parseVtt(input: string): LyricLine[] {
+  const lines: LyricLine[] = [];
+  const timestamp = (value: string): number | undefined => {
+    if (!/^(?:\d{2,}:)?\d{2}:\d{2}\.\d{3}$/.test(value)) return undefined;
+    const parts = value.split(/[:.]/);
+    if (parts.length === 3) {
+      const [minutes, seconds, milliseconds] = parts.map(Number);
+      if (seconds >= 60) return undefined;
+      return minutes * 60 + seconds + milliseconds / 1000;
+    }
+    if (parts.length === 4) {
+      const [hours, minutes, seconds, milliseconds] = parts.map(Number);
+      if (minutes >= 60 || seconds >= 60) return undefined;
+      return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
+    }
+    return undefined;
+  };
+  const decodeText = (text: string) => text
+    .replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ').replace(/&lrm;/g, '').replace(/&rlm;/g, '')
+    .trim();
+
+  for (const block of input.replace(/^\uFEFF/, '').replace(/\r/g, '').split(/\n\s*\n/)) {
+    const rows = block.split('\n');
+    const index = rows.findIndex((line) => line.includes('-->'));
+    if (index === -1) continue;
+    const match = rows[index].match(/^\s*(\S+)\s+-->\s+(\S+)(?:\s+.*)?$/);
+    if (!match) continue;
+    const start = timestamp(match[1]);
+    const end = timestamp(match[2]);
+    if (start === undefined || end === undefined || end <= start) continue;
+    const text = decodeText(rows.slice(index + 1).join(' '));
+    lines.push({ start, end, text });
+  }
+  return normalizeLyrics(lines);
+}
+
 export function normalizeLyrics(lines: LyricLine[]): LyricLine[] {
   return lines
     .filter((line) => Number.isFinite(line.start) && line.start >= 0 && typeof line.text === 'string')
