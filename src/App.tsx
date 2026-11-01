@@ -5,12 +5,13 @@ import {
   Settings2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Upload, Volume1, Volume2, VolumeX, Waves, X,
 } from 'lucide-react';
 import type { LyricLine, Preferences, Track } from './types';
-import { activeLyricIndex, formatTime, nextLyricIndex, titleFromFilename } from './lib/lyrics';
+import { formatTime, lyricTransitionMs, lyricWindow, nextLyricIndex, titleFromFilename } from './lib/lyrics';
 import { readDuration } from './lib/audio';
 import { loadTracks, readPreferences, removeStoredTrack, storeOrder, storePreferences, storeTrack } from './lib/storage';
 import { createDemoTrack } from './lib/demo';
 import { usePlayer } from './hooks/usePlayer';
 import { LyricsEditor } from './components/LyricsEditor';
+import { LyricStack } from './components/LyricStack';
 import { Modal } from './components/Modal';
 import { Settings } from './components/Settings';
 import { TranscriptionDialog } from './components/TranscriptionDialog';
@@ -44,10 +45,12 @@ function App() {
   const actualDuration = duration || active?.duration || 0;
   const totalDuration = tracks.reduce((total, track) => total + track.duration, 0);
   const readyLyrics = tracks.filter((track) => track.lyrics.some((line) => line.text)).length;
-  const lyricIndex = active ? activeLyricIndex(active.lyrics, time, active.offset) : -1;
   const nextIndex = active ? nextLyricIndex(active.lyrics, time, active.offset) : -1;
-  const currentLine = active?.lyrics[lyricIndex];
   const nextLine = active?.lyrics[nextIndex];
+  // The upcoming line starts rising a moment early while playing, so the gap message fades as it grows in.
+  const lyricLead = playing ? 1.5 : 0;
+  const lyricWin = active ? lyricWindow(active.lyrics, time, active.offset, lyricLead) : null;
+  const lyricMs = active && lyricWin ? lyricTransitionMs(active.lyrics, lyricWin, time, active.offset, lyricLead) : 700;
   const hasLyrics = Boolean(active?.lyrics.some((line) => line.text));
   const isPresenting = fullscreen || stageOnly;
   const modalOpen = settingsOpen || editing || Boolean(transcribeIds) || Boolean(removeId);
@@ -328,12 +331,11 @@ function App() {
             : gap ? <div className="gap-content"><span className="countdown">{gap.remaining}</span><p>A little room to breathe.</p><h3>{tracks.find((track) => track.id === gap.nextId)?.title}</h3><button className="button stage-cta" onClick={() => { const next = tracks.find((track) => track.id === gap.nextId); if (next) selectTrack(next, true); }}>Start next song <SkipForward size={15} /></button></div>
             : finished ? <div className="finished-content"><span className="finished-icon"><Check size={32} /></span><p className="welcome-kicker">THAT WAS A LOVELY LITTLE SESSION</p><h3>Every voice.<br /><em>Part of the song.</em></h3><p>You’ve reached the end of your queue.</p><button className="button stage-cta" onClick={() => tracks[0] && selectTrack(tracks[0], true)}><RotateCcw size={16} /> Sing it again</button></div>
             : !hasLyrics ? <div className="no-lyrics"><Music2 size={36} strokeWidth={1.2} /><p className="welcome-kicker">A SONG WAITING FOR ITS WORDS</p><h3>{active.title}</h3><p>The music is ready. Let’s add something to sing.</p><div className="stage-buttons"><button className="button stage-cta" onClick={() => setTranscribeIds([active.id])}><Sparkles size={16} /> Generate lyrics</button><button className="button stage-secondary" onClick={() => setEditing(true)}><FileText size={16} /> Add lyrics</button></div><small>Or just press play and enjoy the music.</small></div>
-            : <div className="caption-stack">
-              <p className="previous-lyric" aria-hidden="true">{lyricIndex > 0 ? active.lyrics[lyricIndex - 1].text : '\u00a0'}</p>
-              <h3 className={`current-lyric ${!currentLine?.text ? 'instrumental' : ''}`} key={`${active.id}-${lyricIndex}`}>{currentLine?.text || <><span className="instrumental-notes"><Music2 size={30} /></span>{nextLine ? (time < active.lyrics[0].start + active.offset ? 'The song is about to begin' : 'Let the music breathe') : 'Let the last notes linger'}</>}</h3>
-              <p className="next-lyric">{nextLine?.text || '\u00a0'}</p>
-              {nextLine && !currentLine?.text && <span className="lyrics-count-in">Words in {Math.max(1, Math.ceil(nextLine.start + active.offset - time))}s</span>}
-            </div>}
+            : <LyricStack trackId={active.id} lines={active.lyrics} window={lyricWin!} durationMs={lyricMs} pause={<>
+              <span className="instrumental-notes"><Music2 size={30} /></span>
+              {nextLine ? (time < active.lyrics[0].start + active.offset ? 'The song is about to begin' : 'Let the music breathe') : 'Let the last notes linger'}
+              {nextLine && <span className="lyrics-count-in">Words in {Math.max(1, Math.ceil(nextLine.start + active.offset - time))}s</span>}
+            </>} />}
           </div>
           <div className="stage-bottomline"><span>{active ? <><Music2 size={13} /> {active.title}</> : <><Waves size={15} /> A space for every voice</>}</span><div className="stage-caption-tools"><button aria-label="Smaller lyrics" disabled={preferences.fontSize <= 32} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.max(32, value.fontSize - 4) }))}>A<span>−</span></button><span className="caption-tool-divider" /><button aria-label="Larger lyrics" disabled={preferences.fontSize >= 88} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.min(88, value.fontSize + 4) }))}>A<span>+</span></button></div></div>
         </section>
