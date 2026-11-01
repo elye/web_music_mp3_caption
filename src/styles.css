@@ -134,6 +134,8 @@ kbd { font-family: inherit; font-size: 9px; display: inline-block; padding: 1px 
 .lyric-ghosts { position: absolute; inset: 0; pointer-events: none; }
 .lyric-flow > * { will-change: transform, opacity; }
 .previous-lyric { font-size: clamp(15px, 1.5vw, 24px); color: #96938d; line-height: 1.6; margin-bottom: 28px; white-space: pre-line; overflow-wrap: anywhere; transition: color var(--lyric-ms, 700ms) ease; }
+/* Each word is its own box so it can travel from its spot in one layout to its spot in the next. */
+.lyric-word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
 .current-lyric { font-family: var(--serif); font-size: var(--lyric-size); font-weight: 500; line-height: 1.28; letter-spacing: -0.8px; color: #f4d6a5; white-space: pre-line; overflow-wrap: anywhere; text-wrap: balance; transition: color var(--lyric-ms, 700ms) ease; }
 .next-lyric { font-size: clamp(17px, 1.8vw, 27px); line-height: 1.5; color: #b2afa7; margin-top: 28px; white-space: pre-line; overflow-wrap: anywhere; transition: color var(--lyric-ms, 700ms) ease; }
 .after-lyric { font-size: clamp(15px, 1.5vw, 24px); line-height: 1.5; color: #8d8a83; margin-top: 14px; white-space: pre-line; overflow-wrap: anywhere; }
