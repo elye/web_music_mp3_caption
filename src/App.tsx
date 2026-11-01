@@ -165,7 +165,7 @@ function App() {
   const togglePlayback = useCallback(() => {
     if (gap) { cancelGap(); notify('Auto-advance paused. Press Play to continue.'); return; }
     if (!active) return;
-    if (playing && !fading) engine.pause();
+    if (playing && !fading) void engine.pause();
     else {
       if (engine.audio.ended) {
         const next = tracks[activeIndex + 1] ?? (preferences.repeat || finished ? tracks[0] : undefined);
@@ -177,14 +177,20 @@ function App() {
     }
   }, [active, activeIndex, cancelGap, engine, fading, finished, gap, notify, play, playing, preferences.repeat, selectTrack, tracks]);
 
+  // While music is audible, fade it out before changing song or position instead of cutting it off.
+  const afterFadeOut = useCallback((action: () => void) => {
+    if (!playing || fading) { action(); return; }
+    void engine.fadeOut().then((completed) => { if (completed) action(); });
+  }, [engine, fading, playing]);
+
   function nextTrack() {
     const next = tracks[activeIndex + 1] ?? (preferences.repeat ? tracks[0] : undefined);
-    if (next) selectTrack(next, playing || Boolean(gap));
+    if (next) afterFadeOut(() => selectTrack(next, playing || Boolean(gap)));
   }
   function previousTrack() {
     cancelGap(); setFinished(false);
-    if (time > 3 || activeIndex === 0) engine.seek(0);
-    else if (tracks[activeIndex - 1]) selectTrack(tracks[activeIndex - 1], playing);
+    if (time > 3 || activeIndex === 0) afterFadeOut(() => { engine.seek(0); if (playing) play(); });
+    else if (tracks[activeIndex - 1]) afterFadeOut(() => selectTrack(tracks[activeIndex - 1], playing));
   }
 
   useEffect(() => {
@@ -310,7 +316,7 @@ function App() {
         <div className="queue-meta"><span>{tracks.length ? `${tracks.length} song${tracks.length === 1 ? '' : 's'} · ${formatTime(totalDuration)}` : 'A good evening starts with a song'}</span>{tracks.length > 0 && <span className="autoplay-badge"><Repeat2 size={12} /> Auto-next</span>}</div>
         <ol className="track-list">
           {tracks.map((track, index) => <li key={track.id} className={`track-row ${track.id === activeId ? 'selected' : ''}`}>
-            <button className="track-select" onClick={() => { if (track.id !== activeId) selectTrack(track, playing || Boolean(gap)); }} aria-label={`Select ${track.title}`} aria-current={track.id === activeId ? 'true' : undefined}>
+            <button className="track-select" onClick={() => { if (track.id !== activeId) afterFadeOut(() => selectTrack(track, playing || Boolean(gap))); }} aria-label={`Select ${track.title}`} aria-current={track.id === activeId ? 'true' : undefined}>
               <span className={`track-number ${track.id === activeId && playing ? 'is-playing' : ''}`}>{track.id === activeId && playing ? <span className="equalizer"><i /><i /><i /></span> : String(index + 1).padStart(2, '0')}</span>
               <span className="track-details"><strong>{track.title}</strong><small>{track.lyrics.some((line) => line.text) ? <><span className="lyrics-dot" /> Lyrics ready</> : <><span className="lyrics-dot pending" /> Needs lyrics</>}<span className="track-duration">{formatTime(track.duration)}</span></small></span>
             </button>

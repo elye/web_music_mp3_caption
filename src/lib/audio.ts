@@ -9,6 +9,9 @@ export class AudioEngine {
   private gain?: GainNode;
   private objectUrl?: string;
   private pauseTimer?: ReturnType<typeof setTimeout>;
+  private seekTimer?: ReturnType<typeof setTimeout>;
+  private seekMuted = false;
+  private cancelPending?: () => void;
   private sequence = 0;
   private volume = 0.8;
   private softened = false;
@@ -31,23 +34,51 @@ export class AudioEngine {
     if (this.context.state === 'suspended') await this.context.resume();
   }
 
+  /** Ramps from the gain's current value, so a fade always starts where the sound actually is. */
   private ramp(value: number, seconds: number) {
     if (!this.context || !this.gain) return;
     const param = this.gain.gain;
     const now = this.context.currentTime;
-    // cancelAndHold prevents a jump when the leader reverses a fade mid-way.
-    if (typeof param.cancelAndHoldAtTime === 'function') param.cancelAndHoldAtTime(now);
-    else {
-      const current = param.value;
-      param.cancelScheduledValues(now);
-      param.setValueAtTime(current, now);
-    }
-    param.linearRampToValueAtTime(value, now + seconds);
+    const current = param.value;
+    param.cancelScheduledValues(now);
+    // Without this anchor a ramp would start from the end of the previous one (possibly long ago),
+    // so the fade would be skipped or cut short.
+    param.setValueAtTime(current, now);
+    if (seconds > 0) param.linearRampToValueAtTime(value, now + seconds);
+    else param.setValueAtTime(value, now);
   }
+
+  private cancelFade() {
+    clearTimeout(this.pauseTimer);
+    this.cancelPending?.();
+    this.cancelPending = undefined;
+  }
+
+  private cancelSeekMute() {
+    clearTimeout(this.seekTimer);
+    this.seekMuted = false;
+  }
+
+  /** Whether the gain should currently follow the volume/soften settings. */
+  private get live() {
+    return !this.fading && !this.seekMuted && !this.audio.paused;
+  }
+
+  private releaseSeekMute = () => {
+    clearTimeout(this.seekTimer);
+    if (!this.seekMuted) return;
+    // Wait for the new position's audio to be flowing before bringing the sound back.
+    this.seekTimer = setTimeout(() => {
+      if (this.audio.seeking) { this.releaseSeekMute(); return; }
+      this.seekMuted = false;
+      if (this.live) this.ramp(softenedGain(this.volume, this.softened), 0.12);
+    }, 80);
+  };
 
   load(track: Track) {
     this.sequence++;
-    clearTimeout(this.pauseTimer);
+    this.cancelFade();
+    this.cancelSeekMute();
     this.fading = false;
     this.audio.pause();
     this.ramp(0, 0);
@@ -60,7 +91,8 @@ export class AudioEngine {
 
   async play() {
     const sequence = ++this.sequence;
-    clearTimeout(this.pauseTimer);
+    this.cancelFade();
+    this.cancelSeekMute();
     this.fading = false;
     await this.unlock();
     if (sequence !== this.sequence) return;
@@ -70,39 +102,57 @@ export class AudioEngine {
     this.onChange();
   }
 
-  pause() {
+  /** Fades the sound to silence but leaves the audio running. Resolves false if something else interrupted the fade. */
+  fadeOut(): Promise<boolean> {
     this.sequence++;
-    clearTimeout(this.pauseTimer);
-    if (this.audio.paused) return;
+    this.cancelFade();
+    this.cancelSeekMute();
+    if (this.audio.paused) return Promise.resolve(true);
     this.fading = true;
     this.ramp(0, this.fadeSeconds);
     this.onChange();
-    this.pauseTimer = setTimeout(() => {
-      this.audio.pause();
-      this.fading = false;
-      this.onChange();
-    }, this.fadeSeconds * 1000);
+    return new Promise((resolve) => {
+      this.cancelPending = () => resolve(false);
+      this.pauseTimer = setTimeout(() => {
+        this.cancelPending = undefined;
+        resolve(true);
+      }, this.fadeSeconds * 1000);
+    });
+  }
+
+  async pause() {
+    if (this.audio.paused || !(await this.fadeOut())) return;
+    this.audio.pause();
+    this.fading = false;
+    this.onChange();
   }
 
   setVolume(volume: number) {
     this.volume = volume;
-    if (!this.fading && !this.audio.paused) this.ramp(softenedGain(volume, this.softened), 0.15);
+    if (this.live) this.ramp(softenedGain(volume, this.softened), 0.15);
   }
 
   setSoftened(softened: boolean) {
     this.softened = softened;
-    if (!this.fading && !this.audio.paused) this.ramp(softenedGain(this.volume, softened), 0.65);
+    if (this.live) this.ramp(softenedGain(this.volume, softened), 0.8);
   }
 
   seek(seconds: number) {
     if (!Number.isFinite(this.audio.duration)) return;
+    // Silence the old position immediately so its buffered audio doesn't overlap the new one.
+    if (this.live) {
+      this.seekMuted = true;
+      this.ramp(0, 0.015);
+    }
     this.audio.currentTime = Math.max(0, Math.min(seconds, this.audio.duration));
+    this.releaseSeekMute();
     this.onChange();
   }
 
   clear() {
     this.sequence++;
-    clearTimeout(this.pauseTimer);
+    this.cancelFade();
+    this.cancelSeekMute();
     this.fading = false;
     this.audio.pause();
     this.audio.removeAttribute('src');
