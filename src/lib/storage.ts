@@ -77,6 +77,7 @@ export function readPreferences(): Preferences {
       fade: [0.6, 1.2, 2.5].includes(value.fade) ? value.fade : DEFAULT_PREFERENCES.fade,
       repeat: value.repeat === true,
       highContrast: value.highContrast === true,
+      minusOne: value.minusOne === true,
     };
   } catch { return DEFAULT_PREFERENCES; }
 }

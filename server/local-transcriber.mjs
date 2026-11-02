@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,12 +14,14 @@ export function offlineEnvironment(root = projectRoot) {
     HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', HF_HUB_DISABLE_TELEMETRY: '1',
     DO_NOT_TRACK: '1', PYTHONNOUSERSITE: '1', PYTHONDONTWRITEBYTECODE: '1',
     HF_HOME: join(root, '.local-transcription', 'cache', 'huggingface'),
+    TORCH_HOME: join(root, '.local-transcription', 'cache', 'torch'),
   };
 }
 
 export function createLocalTranscriber({ root = projectRoot, spawnImpl = spawn, timeoutMs } = {}) {
   const local = join(root, '.local-transcription');
   const timeout = timeoutMs ?? boundedNumber(process.env.LOCAL_WHISPER_TIMEOUT_SECONDS, 1200, 1, 7200) * 1000;
+  const separationTimeout = boundedNumber(process.env.LOCAL_SEPARATION_TIMEOUT_SECONDS, 1800, 1, 14400) * 1000;
   const threads = Math.floor(boundedNumber(process.env.LOCAL_WHISPER_THREADS, 4, 1, 16));
 
   async function configuration() {
@@ -44,63 +46,118 @@ export function createLocalTranscriber({ root = projectRoot, spawnImpl = spawn, 
     }
   }
 
+  async function minusOneStatus() {
+    try {
+      const { python } = await configuration();
+      const saved = await readFile(join(local, 'config.json'), 'utf8').then(JSON.parse).catch(() => ({}));
+      if (saved.minusOne !== 'htdemucs') throw new Error('not installed');
+      await access(python, constants.X_OK);
+      const weights = await readdir(join(local, 'cache', 'torch', 'hub', 'checkpoints'));
+      if (!weights.some((file) => file.endsWith('.th'))) throw new Error('no weights');
+      return { minusOneAvailable: true, minusOneModel: 'htdemucs', minusOneMessage: 'Demucs htdemucs · on this computer · CPU' };
+    } catch {
+      return { minusOneAvailable: false, minusOneModel: null, minusOneMessage: 'Run pnpm setup:local once to install the vocal remover. There is no cloud fallback.' };
+    }
+  }
+
+  /** Runs one worker process. Resolves only after the process has exited, including on cancel and timeout. */
+  function runPython({ python, args, signal, limit, timeoutMessage, tooLarge, failure: describeFailure }) {
+    return new Promise((resolveOutput, reject) => {
+      const child = spawnImpl(python, args, { env: offlineEnvironment(root), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      let stdout = '';
+      let stderr = '';
+      let failure;
+      let killTimer;
+      const stop = (error) => {
+        if (failure) return;
+        failure = error;
+        child.kill('SIGTERM');
+        killTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
+        killTimer.unref();
+      };
+      const abort = () => stop(new DOMException('Local processing cancelled.', 'AbortError'));
+      const timer = setTimeout(() => stop(new Error(timeoutMessage)), limit);
+      timer.unref();
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+        if (stdout.length > 4 * 1024 * 1024) stop(new Error(tooLarge));
+      });
+      child.stderr.on('data', (data) => { stderr = (stderr + data.toString()).slice(-16000); });
+      child.once('error', () => { failure = new Error('Could not start the local Python runtime. Run pnpm setup:local again.'); });
+      // Wait for close, not just abort, before releasing the job slot or removing its audio.
+      child.once('close', (code) => {
+        clearTimeout(timer); clearTimeout(killTimer);
+        signal?.removeEventListener('abort', abort);
+        if (failure) reject(failure);
+        else if (code !== 0) reject(new Error(describeFailure(stderr)));
+        else resolveOutput(stdout);
+      });
+    });
+  }
+
+  async function withTemporaryDirectory(run) {
+    const tempRoot = join(local, 'tmp');
+    await mkdir(tempRoot, { recursive: true, mode: 0o700 });
+    const temporary = await mkdtemp(join(tempRoot, 'audio-'));
+    try { return await run(temporary); } finally { await rm(temporary, { recursive: true, force: true }); }
+  }
+
   async function transcribe({ buffer, language = '', signal }) {
     signal?.throwIfAborted();
     if (!(await status()).transcriptionAvailable) throw new Error('Local transcription is not set up. Run pnpm setup:local.');
     const { python, modelPath } = await configuration();
-    const tempRoot = join(local, 'tmp');
-    await mkdir(tempRoot, { recursive: true, mode: 0o700 });
-    const temporary = await mkdtemp(join(tempRoot, 'audio-'));
-    try {
+    return withTemporaryDirectory(async (temporary) => {
       const audioPath = join(temporary, 'chunk.wav');
       await writeFile(audioPath, buffer, { mode: 0o600 });
       signal?.throwIfAborted();
       const args = [join(projectRoot, 'server', 'transcribe_local.py'), '--model', modelPath,
         '--audio', audioPath, '--language', language, '--threads', String(threads)];
-      const output = await new Promise((resolveOutput, reject) => {
-        const child = spawnImpl(python, args, { env: offlineEnvironment(root), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-        child.stdout.setEncoding('utf8');
-        child.stderr.setEncoding('utf8');
-        let stdout = '';
-        let stderr = '';
-        let failure;
-        let killTimer;
-        const stop = (error) => {
-          if (failure) return;
-          failure = error;
-          child.kill('SIGTERM');
-          killTimer = setTimeout(() => child.kill('SIGKILL'), 1000);
-          killTimer.unref();
-        };
-        const abort = () => stop(new DOMException('Local transcription cancelled.', 'AbortError'));
-        const timer = setTimeout(() => stop(new Error('Local transcription took too long. Try a smaller model, or increase LOCAL_WHISPER_TIMEOUT_SECONDS.')), timeout);
-        timer.unref();
-        signal?.addEventListener('abort', abort, { once: true });
-        if (signal?.aborted) abort();
-        child.stdout.on('data', (data) => {
-          stdout += data.toString();
-          if (stdout.length > 4 * 1024 * 1024) stop(new Error('The local transcription result was too large.'));
-        });
-        child.stderr.on('data', (data) => { stderr = (stderr + data.toString()).slice(-16000); });
-        child.once('error', () => { failure = new Error('Could not start the local Python runtime. Run pnpm setup:local again.'); });
-        // Wait for close, not just abort, before releasing the job slot or removing its audio.
-        child.once('close', (code) => {
-          clearTimeout(timer); clearTimeout(killTimer);
-          signal?.removeEventListener('abort', abort);
-          if (failure) reject(failure);
-          else if (code !== 0) reject(new Error(/16 kHz|WAV|wave\.Error|six minutes/i.test(stderr)
-            ? 'The local worker requires a valid 16 kHz mono WAV chunk, no longer than six minutes.'
-            : 'The local model could not transcribe this audio. Check the local installation with pnpm setup:local --offline.'));
-          else resolveOutput(stdout);
-        });
+      const output = await runPython({
+        python, args, signal, limit: timeout,
+        timeoutMessage: 'Local transcription took too long. Try a smaller model, or increase LOCAL_WHISPER_TIMEOUT_SECONDS.',
+        tooLarge: 'The local transcription result was too large.',
+        failure: (stderr) => /16 kHz|WAV|wave\.Error|six minutes/i.test(stderr)
+          ? 'The local worker requires a valid 16 kHz mono WAV chunk, no longer than six minutes.'
+          : 'The local model could not transcribe this audio. Check the local installation with pnpm setup:local --offline.',
       });
       let result;
       try { result = JSON.parse(output); } catch { throw new Error('The local worker returned an invalid result.'); }
       if (!Array.isArray(result.lyrics)) throw new Error('The local worker returned no timed lyrics.');
       return result;
-    } finally {
-      await rm(temporary, { recursive: true, force: true });
-    }
+    });
   }
-  return { status, transcribe };
+
+  /** Removes the vocals from a whole song. Returns the backing track as an MP3 buffer. */
+  async function separate({ buffer, signal }) {
+    signal?.throwIfAborted();
+    if (!(await minusOneStatus()).minusOneAvailable) throw new Error('Local vocal removal is not set up. Run pnpm setup:local.');
+    const { python } = await configuration();
+    return withTemporaryDirectory(async (temporary) => {
+      const audioPath = join(temporary, 'song');
+      const outputPath = join(temporary, 'minus-one.mp3');
+      await writeFile(audioPath, buffer, { mode: 0o600 });
+      signal?.throwIfAborted();
+      const args = [join(projectRoot, 'server', 'separate_local.py'), '--model', 'htdemucs',
+        '--audio', audioPath, '--output', outputPath, '--threads', String(threads)];
+      const output = await runPython({
+        python, args, signal, limit: separationTimeout,
+        timeoutMessage: 'Local vocal removal took too long. Increase LOCAL_SEPARATION_TIMEOUT_SECONDS, or try a shorter song.',
+        tooLarge: 'The local vocal removal result was too large.',
+        failure: (stderr) => /15 minute/i.test(stderr) ? 'Local vocal removal supports songs up to 15 minutes.'
+          : /no audio|silent/i.test(stderr) ? 'Local vocal removal could not find any sound in this file.'
+          : /av\.|InvalidData|decode/i.test(stderr) ? 'Local vocal removal could not read this audio file.'
+          : 'The local vocal remover failed. Check the installation with pnpm setup:local --offline.',
+      });
+      let result;
+      try { result = JSON.parse(output); } catch { throw new Error('The local worker returned an invalid result.'); }
+      const mp3 = await readFile(outputPath).catch(() => undefined);
+      if (!mp3?.length) throw new Error('The local worker returned no backing track.');
+      return { buffer: mp3, duration: result.duration };
+    });
+  }
+  return { status, minusOneStatus, transcribe, separate };
 }

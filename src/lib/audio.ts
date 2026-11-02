@@ -4,10 +4,19 @@ export const softenedGain = (volume: number, softened: boolean) => Math.max(0, M
 
 /** One audio element and gain node for the whole session. Ramps never alter the queue. */
 export class AudioEngine {
+  /** The original song. It is the clock for everything: time, duration, ending, and seeking. */
   readonly audio = new Audio();
+  /** The minus-one, kept playing silently in step with the original so switching is only a crossfade. */
+  readonly backing = new Audio();
   private context?: AudioContext;
   private gain?: GainNode;
+  private versionGains?: { original: GainNode; backing: GainNode };
   private objectUrl?: string;
+  private backingBlob?: Blob;
+  private backingUrl?: string;
+  private backingReady = false;
+  private wantsMinusOne = false;
+  private syncTimer?: ReturnType<typeof setInterval>;
   private pauseTimer?: ReturnType<typeof setTimeout>;
   private seekTimer?: ReturnType<typeof setTimeout>;
   private seekMuted = false;
@@ -21,23 +30,47 @@ export class AudioEngine {
 
   constructor() {
     this.audio.preload = 'metadata';
+    this.backing.preload = 'auto';
+    // Only switch to the minus-one once it can play, so the sound never drops into silence.
+    this.backing.addEventListener('canplay', () => {
+      if (!this.backingBlob || this.backingReady) return;
+      this.backingReady = true;
+      this.applyVersion();
+      this.onChange();
+    });
+    this.backing.addEventListener('error', () => { this.backingReady = false; this.applyVersion(); });
+    this.audio.addEventListener('ended', () => { this.backing.pause(); this.stopSync(); });
+  }
+
+  /** True when the minus-one is the version you can hear. */
+  get playingMinusOne() {
+    return this.wantsMinusOne && this.backingReady;
   }
 
   private async unlock() {
     if (!this.context) {
       this.context = new AudioContext();
+      // The output gain is created last: it carries volume, softening, and fades for both versions.
+      const original = this.context.createGain();
+      const backing = this.context.createGain();
+      this.versionGains = { original, backing };
       this.gain = this.context.createGain();
       this.gain.gain.value = 0;
-      this.context.createMediaElementSource(this.audio).connect(this.gain);
+      original.gain.value = this.playingMinusOne ? 0 : 1;
+      backing.gain.value = this.playingMinusOne ? 1 : 0;
+      this.context.createMediaElementSource(this.audio).connect(original);
+      this.context.createMediaElementSource(this.backing).connect(backing);
+      original.connect(this.gain);
+      backing.connect(this.gain);
       this.gain.connect(this.context.destination);
     }
     if (this.context.state === 'suspended') await this.context.resume();
   }
 
   /** Ramps from the gain's current value, so a fade always starts where the sound actually is. */
-  private ramp(value: number, seconds: number) {
-    if (!this.context || !this.gain) return;
-    const param = this.gain.gain;
+  private ramp(value: number, seconds: number, node = this.gain) {
+    if (!this.context || !node) return;
+    const param = node.gain;
     const now = this.context.currentTime;
     const current = param.value;
     param.cancelScheduledValues(now);
@@ -69,11 +102,89 @@ export class AudioEngine {
     if (!this.seekMuted) return;
     // Wait for the new position's audio to be flowing before bringing the sound back.
     this.seekTimer = setTimeout(() => {
-      if (this.audio.seeking) { this.releaseSeekMute(); return; }
+      if (this.audio.seeking || (this.playingMinusOne && this.backing.seeking)) { this.releaseSeekMute(); return; }
       this.seekMuted = false;
       if (this.live) this.ramp(softenedGain(this.volume, this.softened), 0.12);
     }, 80);
   };
+
+  /** Crossfades to the version that should be audible. Both are already playing in step. */
+  private applyVersion() {
+    if (!this.versionGains) return;
+    const minusOne = this.playingMinusOne;
+    // A short crossfade hides the instant of the switch without a noticeable dip.
+    this.ramp(minusOne ? 0 : 1, 0.05, this.versionGains.original);
+    this.ramp(minusOne ? 1 : 0, 0.05, this.versionGains.backing);
+  }
+
+  /** Chooses the minus-one (true) or the original (false) for songs that have a minus-one. */
+  setMinusOne(wanted: boolean) {
+    this.wantsMinusOne = wanted;
+    this.applyVersion();
+    this.onChange();
+  }
+
+  /** Loads, replaces, or removes the minus-one of the current song. */
+  syncMinusOne(blob: Blob | undefined) {
+    if (blob === this.backingBlob) return;
+    this.backing.pause();
+    if (this.backingUrl) URL.revokeObjectURL(this.backingUrl);
+    this.backingBlob = blob;
+    this.backingReady = false;
+    this.backingUrl = undefined;
+    if (!blob) {
+      this.backing.removeAttribute('src');
+      this.backing.load();
+    } else {
+      this.backingUrl = URL.createObjectURL(blob);
+      this.backing.src = this.backingUrl;
+      this.backing.load();
+      // Join the original wherever it is right now, including mid-song.
+      const join = () => {
+        this.backing.removeEventListener('loadedmetadata', join);
+        if (this.backingBlob !== blob) return;
+        this.alignBacking(true);
+        if (this.isPlaying) void this.backing.play().catch(() => {});
+      };
+      this.backing.addEventListener('loadedmetadata', join);
+    }
+    this.applyVersion();
+    this.onChange();
+  }
+
+  private get isPlaying() {
+    return !this.audio.paused && !this.audio.ended;
+  }
+
+  private alignBacking(force = false) {
+    if (!this.backingBlob || this.backing.readyState < 1) return;
+    // An ended original restarts from the beginning when played again.
+    const target = this.audio.ended ? 0 : this.audio.currentTime;
+    if (force || Math.abs(target - this.backing.currentTime) > 0.05) this.backing.currentTime = target;
+  }
+
+  /**
+   * Keeps the silent version locked to the original. Small drift is corrected by nudging its speed
+   * (inaudible), and only a large one by seeking.
+   */
+  private startSync() {
+    this.stopSync();
+    this.syncTimer = setInterval(() => {
+      if (!this.backingBlob || this.backing.readyState < 1) return;
+      if (!this.isPlaying) { this.backing.pause(); return; }
+      if (this.backing.paused) void this.backing.play().catch(() => {});
+      const drift = this.audio.currentTime - this.backing.currentTime;
+      if (Math.abs(drift) > 0.25) { this.backing.currentTime = this.audio.currentTime; this.backing.playbackRate = 1; }
+      else if (Math.abs(drift) < 0.01) this.backing.playbackRate = 1;
+      else this.backing.playbackRate = 1 + Math.max(-0.03, Math.min(0.03, drift * 0.5));
+    }, 200);
+  }
+
+  private stopSync() {
+    clearInterval(this.syncTimer);
+    this.syncTimer = undefined;
+    this.backing.playbackRate = 1;
+  }
 
   load(track: Track) {
     this.sequence++;
@@ -81,11 +192,15 @@ export class AudioEngine {
     this.cancelSeekMute();
     this.fading = false;
     this.audio.pause();
+    this.backing.pause();
+    this.stopSync();
     this.ramp(0, 0);
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
     this.objectUrl = URL.createObjectURL(track.file);
     this.audio.src = this.objectUrl;
     this.audio.load();
+    if (track.minusOne && track.minusOne === this.backingBlob) this.backing.currentTime = 0;
+    this.syncMinusOne(track.minusOne);
     this.onChange();
   }
 
@@ -96,8 +211,12 @@ export class AudioEngine {
     this.fading = false;
     await this.unlock();
     if (sequence !== this.sequence) return;
+    this.alignBacking(true);
+    // Start the minus-one first; the original stays the last element to play.
+    if (this.backingBlob) void this.backing.play().catch(() => {});
     await this.audio.play();
     if (sequence !== this.sequence) return;
+    this.startSync();
     this.ramp(softenedGain(this.volume, this.softened), Math.min(this.fadeSeconds, 0.8));
     this.onChange();
   }
@@ -123,6 +242,8 @@ export class AudioEngine {
   async pause() {
     if (this.audio.paused || !(await this.fadeOut())) return;
     this.audio.pause();
+    this.backing.pause();
+    this.stopSync();
     this.fading = false;
     this.onChange();
   }
@@ -145,6 +266,7 @@ export class AudioEngine {
       this.ramp(0, 0.015);
     }
     this.audio.currentTime = Math.max(0, Math.min(seconds, this.audio.duration));
+    if (this.backingBlob && this.backing.readyState >= 1) this.backing.currentTime = this.audio.currentTime;
     this.releaseSeekMute();
     this.onChange();
   }
@@ -155,10 +277,12 @@ export class AudioEngine {
     this.cancelSeekMute();
     this.fading = false;
     this.audio.pause();
+    this.stopSync();
     this.audio.removeAttribute('src');
     this.audio.load();
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
     this.objectUrl = undefined;
+    this.syncMinusOne(undefined);
     this.onChange();
   }
 

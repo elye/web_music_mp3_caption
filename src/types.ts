@@ -10,6 +10,8 @@ export interface Track {
   artist: string;
   duration: number;
   file: Blob;
+  /** Backing track with the vocals removed, generated locally. */
+  minusOne?: Blob;
   filename: string;
   lyrics: LyricLine[];
   lyricSource?: 'imported' | 'manual' | 'transcribed';
@@ -23,6 +25,8 @@ export interface Preferences {
   repeat: boolean;
   fade: number;
   highContrast: boolean;
+  /** Play the minus-one version of songs that have one. */
+  minusOne: boolean;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -32,4 +36,5 @@ export const DEFAULT_PREFERENCES: Preferences = {
   repeat: false,
   fade: 1.2,
   highContrast: false,
+  minusOne: false,
 };
