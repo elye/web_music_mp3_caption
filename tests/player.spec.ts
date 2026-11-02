@@ -28,14 +28,33 @@ async function instrumentAudio(page: Page) {
   await page.addInitScript(() => {
     const play = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function () {
+      const elements = (window as unknown as { testElements: HTMLMediaElement[] }).testElements;
+      if (!elements.includes(this)) elements.push(this);
       (window as unknown as { testAudio: HTMLMediaElement }).testAudio = this;
       return play.call(this);
     };
     const gain = AudioContext.prototype.createGain;
+    (window as unknown as { testElements: HTMLMediaElement[]; testGains: GainNode[] }).testElements = [];
+    (window as unknown as { testGains: GainNode[] }).testGains = [];
     AudioContext.prototype.createGain = function () {
       const node = gain.call(this);
       (window as unknown as { testGain: GainNode }).testGain = node;
+      (window as unknown as { testGains: GainNode[] }).testGains.push(node);
       return node;
+    };
+  });
+}
+
+/** Both versions of a song: [original, minus-one] media elements and their version gains. */
+async function versions(page: Page) {
+  return page.evaluate(() => {
+    const w = window as unknown as { testElements: HTMLMediaElement[]; testGains: GainNode[] };
+    const [original, backing] = [...w.testElements].sort((a, b) => Number(a.src === '') - Number(b.src === ''));
+    const byDuration = [original, backing];
+    return {
+      count: w.testElements.length,
+      elements: byDuration.map((el) => el && ({ src: el.src, paused: el.paused, time: el.currentTime, ended: el.ended })),
+      gains: w.testGains.slice(0, 2).map((node) => node.gain.value),
     };
   });
 }
@@ -224,25 +243,36 @@ test('makes a minus-one on request, switches versions mid-song, downloads both, 
 
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await expect.poll(() => audioPaused(page)).toBe(false);
-  const source = () => page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.src);
-  const original = await source();
+  // Both versions play together from the start, so switching never has to load or seek.
+  await expect.poll(async () => (await versions(page)).elements.every((el) => el && !el.paused)).toBe(true);
+  const before = await versions(page);
+  expect(before.elements[0]!.src).not.toBe(before.elements[1]!.src);
+  expect(before.gains[0]).toBeCloseTo(1, 1);
+  expect(before.gains[1]).toBeCloseTo(0, 1);
   await page.evaluate(() => { (window as unknown as { testAudio: HTMLMediaElement }).testAudio.currentTime = 5; });
-  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(source).not.toBe(original);
-  // Same place in the song, still playing.
-  await expect.poll(() => page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.currentTime)).toBeGreaterThan(4.9);
-  await expect.poll(() => audioPaused(page)).toBe(false);
+  await page.waitForTimeout(400);
+  const toMinusOne = page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' });
+  await toMinusOne.click();
+  await expect(toMinusOne).toHaveAttribute('aria-pressed', 'true');
+  // A crossfade of gains only: same sources, nothing paused, and the timeline carries on.
+  await expect.poll(async () => (await versions(page)).gains.map((gain) => Math.round(gain))).toEqual([0, 1]);
+  const after = await versions(page);
+  expect(after.elements.map((el) => el!.src)).toEqual(before.elements.map((el) => el!.src));
+  expect(after.elements.every((el) => !el!.paused)).toBe(true);
+  expect(after.elements[0]!.time).toBeGreaterThan(5);
+  expect(Math.abs(after.elements[0]!.time - after.elements[1]!.time)).toBeLessThan(0.3);
   await expect(page.locator('.stage-version')).toHaveText('Minus-one');
-  const backingSource = await source();
   // Shortcuts ignore focused buttons, as with the other keys.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('v');
   await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(source).not.toBe(backingSource);
-  await expect.poll(() => page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.currentTime)).toBeGreaterThan(4.9);
+  await expect.poll(async () => (await versions(page)).gains.map((gain) => Math.round(gain))).toEqual([1, 0]);
+  expect((await versions(page)).elements.every((el) => !el!.paused)).toBe(true);
+  // Seeking moves both, so the next switch lands in the right place.
   await page.keyboard.press('v');
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(toMinusOne).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('slider', { name: 'Song position' }).fill('2');
+  await expect.poll(async () => { const v = await versions(page); return v.elements.every((el) => el!.time > 1.9 && el!.time < 3.5); }).toBe(true);
 
   await page.locator('.lyric-actions').getByRole('button', { name: 'Download' }).click();
   const [originalDownload] = await Promise.all([page.waitForEvent('download'), page.locator('.download-list li').filter({ hasText: 'Original' }).getByRole('button', { name: 'Download' }).click()]);
@@ -311,11 +341,9 @@ test('uploads your own minus-one without the helper, warns about length, and rej
   await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('button', { name: 'Play', exact: true }).click();
-  const source = () => page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.src);
-  const original = await source();
   await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
-  await expect.poll(source).not.toBe(original);
-  await expect.poll(() => audioPaused(page)).toBe(false);
+  await expect.poll(async () => (await versions(page)).gains.map((gain) => Math.round(gain))).toEqual([0, 1]);
+  await expect.poll(async () => (await versions(page)).elements.every((el) => el && !el.paused)).toBe(true);
 
   await page.locator('.lyric-actions').getByRole('button', { name: 'Download' }).click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('.download-list li').filter({ hasText: 'Minus-one' }).getByRole('button', { name: 'Download' }).click()]);

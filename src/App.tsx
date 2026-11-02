@@ -106,18 +106,13 @@ function App() {
   useEffect(() => {
     engine.fadeSeconds = preferences.fade;
     engine.setVolume(preferences.volume);
-    engine.preferMinusOne = preferences.minusOne;
+    engine.setMinusOne(preferences.minusOne);
     try { storePreferences(preferences); } catch { /* Audio remains usable when browser storage is blocked. */ }
   }, [engine, preferences]);
   useEffect(() => { engine.setSoftened(softened); }, [engine, softened]);
-  // Switch between the original and the minus-one without losing the place in the song.
-  useEffect(() => {
-    if (!active || !engine.currentBlob) return;
-    const wanted = engine.sourceFor(active);
-    if (wanted !== engine.currentBlob) {
-      void engine.swap(wanted).catch(() => notify('Playback could not continue after switching versions. Press Play again.', 'error'));
-    }
-  }, [active, engine, notify, preferences.minusOne]);
+  // A minus-one generated or uploaded for the song that is already loaded joins playback in step.
+  const activeMinusOne = active?.minusOne;
+  useEffect(() => { engine.syncMinusOne(activeMinusOne); }, [engine, activeMinusOne]);
   useEffect(() => { if (ready) void storeOrder(tracks.map((track) => track.id)).catch(storageError); }, [tracks, ready, storageError]);
   useEffect(() => {
     if (!notice || notice.kind === 'error') return;
@@ -126,8 +121,10 @@ function App() {
   }, [notice]);
   useEffect(() => {
     const onError = () => { if (engine.audio.error) notify('This audio could not be played. The song is still in your queue. Try another MP3.', 'error'); };
+    const onBackingError = () => { if (engine.backing.error) notify('The minus-one could not be played, so the original is playing. Try uploading or generating it again.', 'error'); };
     engine.audio.addEventListener('error', onError);
-    return () => engine.audio.removeEventListener('error', onError);
+    engine.backing.addEventListener('error', onBackingError);
+    return () => { engine.audio.removeEventListener('error', onError); engine.backing.removeEventListener('error', onBackingError); };
   }, [engine, notify]);
 
   useEffect(() => {
