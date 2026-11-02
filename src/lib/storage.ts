@@ -76,6 +76,7 @@ export function readPreferences(): Preferences {
       gap: [0, 3, 5, 10].includes(value.gap) ? value.gap : DEFAULT_PREFERENCES.gap,
       fade: [0.6, 1.2, 2.5].includes(value.fade) ? value.fade : DEFAULT_PREFERENCES.fade,
       repeat: value.repeat === true,
+      repeatMode: value.repeatMode === 'song' ? 'song' : 'queue',
       highContrast: value.highContrast === true,
       minusOne: value.minusOne === true,
     };

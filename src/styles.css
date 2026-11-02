@@ -210,9 +210,16 @@ kbd { font-family: inherit; font-size: 9px; display: inline-block; padding: 1px 
 .play-button:hover:not(:disabled) { background: var(--orange-dark); }
 .play-button svg.lucide-play { margin-left: 3px; }
 .play-button.fading { animation: pause-pulse 1s ease infinite; }
-.transport-spacer { width: 28px; }
-.repeat-button { margin-right: 12px; }
+.transport-spacer { width: 28px; position: relative; align-self: stretch; }
+.repeat-group { position: relative; display: inline-flex; margin-right: 12px; }
+.repeat-icon { position: relative; display: inline-grid; place-items: center; width: 22px; height: 22px; }
 .repeat-button.enabled { color: var(--orange); background: #c6553512; }
+.repeat-scope { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 200ms ease, visibility 0s linear 200ms; position: absolute; right: 100%; margin-right: 8px; top: 50%; transform: translateY(-50%); display: inline-flex; border: 1px solid #ded7cd; border-radius: 6px; overflow: hidden; white-space: nowrap; }
+.repeat-scope.visible { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 200ms ease, visibility 0s; }
+.repeat-scope button { background: transparent; border: 0; padding: 4px 9px; font-size: 10px; color: #7e7362; }
+.repeat-scope button + button { border-left: 1px solid #ded7cd; }
+.repeat-scope button:hover { background: #f0ebe2; }
+.repeat-scope button[aria-pressed='true'] { background: #c6553512; color: var(--orange); font-weight: 600; }
 .seek-row { display: flex; align-items: center; gap: 9px; font-size: 9px; color: #a09789; font-variant-numeric: tabular-nums; }
 .seek-row > span { min-width: 27px; }
 .seek-row > span:last-child { text-align: right; }
@@ -316,6 +323,11 @@ select { border: 1px solid #d9cfc0; background: #f9f6ef; color: #75634d; font-si
 .presenting .album-art { background: #3b3530; border-color: #62513e; }
 .presenting .icon-button { color: #a99a83; }
 .presenting .icon-button:hover { background: #ffffff0a; color: #dfc8a6; }
+.presenting .repeat-button.enabled, .presenting .repeat-button.enabled:hover { color: #f08560; background: #f0856024; }
+.presenting .repeat-scope, .presenting .repeat-scope button + button { border-color: #615544; }
+.presenting .repeat-scope button { color: #bfaa89; }
+.presenting .repeat-scope button:hover { background: #ffffff0b; }
+.presenting .repeat-scope button[aria-pressed='true'] { background: #f0856024; color: #f08560; }
 .presenting .soften-button { border-color: #615544; color: #bfaa89; }
 .presenting .soften-button.softened { background: #61634938; border-color: #7b8160; color: #b6c394; }
 .presenting .soften-button:hover:not(:disabled) { background: #ffffff0b; }

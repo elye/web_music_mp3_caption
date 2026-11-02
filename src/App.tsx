@@ -59,6 +59,8 @@ function App() {
   const hasLyrics = Boolean(active?.lyrics.some((line) => line.text));
   // The version actually audible: the minus-one only exists for songs it has been generated for.
   const usingMinusOne = Boolean(active?.minusOne && preferences.minusOne);
+  const repeatSong = preferences.repeat && preferences.repeatMode === 'song';
+  const repeatQueue = preferences.repeat && preferences.repeatMode === 'queue';
   const isPresenting = fullscreen || stageOnly;
   // What the stage is showing; when this changes the content fades out and the new content fades in.
   const stageView = !active ? 'welcome' : gap ? 'gap' : finished ? 'finished' : !hasLyrics ? `bare:${active.id}` : `lyrics:${active.id}`;
@@ -131,7 +133,9 @@ function App() {
     const ended = () => {
       // A pause started near the end must not unexpectedly start another song.
       if (engine.fading) { cancelGap(); return; }
-      const next = tracks[activeIndex + 1] ?? (preferences.repeat ? tracks[0] : undefined);
+      // Repeating the current song: start it again straight away, with no gap.
+      if (repeatSong) { play(); return; }
+      const next = tracks[activeIndex + 1] ?? (repeatQueue ? tracks[0] : undefined);
       if (!next) { setFinished(true); return; }
       if (preferences.gap === 0) { selectTrack(next, true); return; }
       const deadline = Date.now() + preferences.gap * 1000;
@@ -145,7 +149,7 @@ function App() {
     };
     engine.audio.addEventListener('ended', ended);
     return () => engine.audio.removeEventListener('ended', ended);
-  }, [activeIndex, cancelGap, engine, preferences.gap, preferences.repeat, selectTrack, tracks]);
+  }, [activeIndex, cancelGap, engine, play, preferences.gap, repeatQueue, repeatSong, selectTrack, tracks]);
 
   useEffect(() => {
     const sync = () => setFullscreen(Boolean(document.fullscreenElement));
@@ -186,14 +190,14 @@ function App() {
     if (playing && !fading) void engine.pause();
     else {
       if (engine.audio.ended) {
-        const next = tracks[activeIndex + 1] ?? (preferences.repeat || finished ? tracks[0] : undefined);
+        const next = tracks[activeIndex + 1] ?? (repeatQueue || finished ? tracks[0] : undefined);
         if (next) { selectTrack(next, true); return; }
         engine.seek(0);
       }
       setFinished(false);
       play();
     }
-  }, [active, activeIndex, cancelGap, engine, fading, finished, gap, notify, play, playing, preferences.repeat, selectTrack, tracks]);
+  }, [active, activeIndex, cancelGap, engine, fading, finished, gap, notify, play, playing, repeatQueue, selectTrack, tracks]);
 
   // While music is audible, fade it out before changing song or position instead of cutting it off.
   const afterFadeOut = useCallback((action: () => void) => {
@@ -202,7 +206,7 @@ function App() {
   }, [engine, fading, playing]);
 
   function nextTrack() {
-    const next = tracks[activeIndex + 1] ?? (preferences.repeat ? tracks[0] : undefined);
+    const next = tracks[activeIndex + 1] ?? (repeatQueue ? tracks[0] : undefined);
     if (next) afterFadeOut(() => selectTrack(next, playing || Boolean(gap)));
   }
   function previousTrack() {
@@ -380,7 +384,7 @@ function App() {
 
     <footer className="player" aria-label="Playback controls">
       <div className="player-song"><span className={`album-art ${playing ? 'album-playing' : ''}`}><AudioLines size={25} /></span><div><strong>{active?.title ?? 'Your next sing-along starts here'}</strong><small>{gap ? `Next song in ${gap.remaining}s` : fading ? 'Fading gently… your song stays in the queue' : softened ? 'Music softened · your place is kept' : active?.artist || (active ? 'Ready when you are' : 'Add a few songs to get things going')}</small>{active && <div className="version-toggle" role="group" aria-label="Playback version"><button aria-pressed={!usingMinusOne} onClick={() => chooseVersion(false)}>Original</button><button aria-pressed={usingMinusOne} title={active.minusOne ? 'Vocals removed · V' : 'Make a minus-one for this song'} onClick={() => chooseVersion(true)}>Minus-one</button></div>}</div></div>
-      <div className="transport"><div className="transport-buttons"><button className={`icon-button repeat-button ${preferences.repeat ? 'enabled' : ''}`} aria-label="Repeat queue" aria-pressed={preferences.repeat} onClick={() => setPreferences((value) => ({ ...value, repeat: !value.repeat }))}><Repeat2 size={18} /></button><button className="icon-button" aria-label="Previous song or restart" disabled={!active} onClick={previousTrack}><SkipBack size={21} fill="currentColor" /></button><button className={`play-button ${fading ? 'fading' : ''}`} aria-label={gap ? 'Pause auto-advance' : playing && !fading ? 'Pause with fade' : 'Play'} disabled={!active} onClick={togglePlayback}>{gap || (playing && !fading) ? <Pause size={23} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</button><button className="icon-button" aria-label="Next song" disabled={!active || (activeIndex === tracks.length - 1 && !preferences.repeat)} onClick={nextTrack}><SkipForward size={21} fill="currentColor" /></button><span className="transport-spacer" /></div><div className="seek-row"><span>{formatTime(time)}</span><input type="range" aria-label="Song position" aria-valuetext={`${formatTime(time)} of ${formatTime(actualDuration)}`} min={0} max={actualDuration || 1} step={0.1} value={Math.min(time, actualDuration || 1)} disabled={!active || !duration} style={{ '--progress': `${actualDuration ? time / actualDuration * 100 : 0}%` } as CSSProperties} onChange={(event) => { cancelGap(); setFinished(false); engine.seek(Number(event.target.value)); }} /><span>{formatTime(actualDuration)}</span></div></div>
+      <div className="transport"><div className="transport-buttons"><span className="repeat-group"><span className={`repeat-scope ${preferences.repeat ? 'visible' : ''}`} role="group" aria-label="Repeat scope"><button aria-pressed={!repeatSong} title="Repeat the whole queue" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'queue' }))}>Queue</button><button aria-pressed={repeatSong} title="Repeat this song" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'song' }))}>Song</button></span><button className={`icon-button repeat-button ${preferences.repeat ? 'enabled' : ''}`} aria-label="Repeat" aria-pressed={preferences.repeat} title={!preferences.repeat ? 'Repeat is off' : repeatSong ? 'Repeating this song' : 'Repeating the whole queue'} onClick={() => setPreferences((value) => ({ ...value, repeat: !value.repeat }))}><span className="repeat-icon"><Repeat2 size={18} /></span></button></span><button className="icon-button" aria-label="Previous song or restart" disabled={!active} onClick={previousTrack}><SkipBack size={21} fill="currentColor" /></button><button className={`play-button ${fading ? 'fading' : ''}`} aria-label={gap ? 'Pause auto-advance' : playing && !fading ? 'Pause with fade' : 'Play'} disabled={!active} onClick={togglePlayback}>{gap || (playing && !fading) ? <Pause size={23} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</button><button className="icon-button" aria-label="Next song" disabled={!active || (activeIndex === tracks.length - 1 && !repeatQueue)} onClick={nextTrack}><SkipForward size={21} fill="currentColor" /></button><span className="transport-spacer" /></div><div className="seek-row"><span>{formatTime(time)}</span><input type="range" aria-label="Song position" aria-valuetext={`${formatTime(time)} of ${formatTime(actualDuration)}`} min={0} max={actualDuration || 1} step={0.1} value={Math.min(time, actualDuration || 1)} disabled={!active || !duration} style={{ '--progress': `${actualDuration ? time / actualDuration * 100 : 0}%` } as CSSProperties} onChange={(event) => { cancelGap(); setFinished(false); engine.seek(Number(event.target.value)); }} /><span>{formatTime(actualDuration)}</span></div></div>
       <div className="volume-controls"><button className={`soften-button ${softened ? 'softened' : ''}`} disabled={!active} aria-pressed={softened} title="Gently lower music to 22% · M" onClick={() => setSoftened((value) => !value)}><Waves size={17} /><span>{softened ? 'Restore' : 'Soften'}</span></button><div className="volume-slider">{preferences.volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}<input type="range" min={0} max={1} step={0.01} value={preferences.volume} aria-label="Volume" aria-valuetext={`${Math.round(preferences.volume * 100)} percent`} style={{ '--progress': `${preferences.volume * 100}%` } as CSSProperties} onChange={(event) => setPreferences((value) => ({ ...value, volume: Number(event.target.value) }))} /></div></div>
     </footer>
     <div className="page-footer"><span>MADE FOR THE MOMENTS BETWEEN US</span><span>{tracks.length ? `${readyLyrics} of ${tracks.length} songs with lyrics` : 'No account. Just your music.'}<span className="footer-divider">/</span><kbd>Space</kbd> to play or pause</span></div>

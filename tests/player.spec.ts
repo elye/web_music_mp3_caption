@@ -394,6 +394,28 @@ test('automatically advances without a gap and repeats the queue', async ({ page
   await expect(page.getByRole('button', { name: 'Pause with fade' })).toBeVisible();
 });
 
+test('repeat shows its state and can loop just the current song', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
+  await importSongs(page, 2);
+  await page.getByRole('button', { name: 'Session settings' }).click();
+  await page.getByLabel('Gap between songs').selectOption('0');
+  await page.getByRole('button', { name: 'All set' }).click();
+  const repeat = page.getByRole('button', { name: 'Repeat', exact: true });
+  const scope = page.getByRole('group', { name: 'Repeat scope' });
+  await expect(repeat).toHaveAttribute('aria-pressed', 'false');
+  await expect(scope).toBeHidden();
+  await repeat.click();
+  await expect(repeat).toHaveAttribute('aria-pressed', 'true');
+  await expect(scope).toBeVisible();
+  await scope.getByRole('button', { name: 'Song' }).click();
+  await expect(scope.getByRole('button', { name: 'Song' })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await page.waitForTimeout(3500);
+  await expect(page.locator('.track-row.selected')).toContainText('First song');
+  await expect(page.getByRole('button', { name: 'Pause with fade' })).toBeVisible();
+});
+
 test('pausing near a track ending does not accidentally start the next song', async ({ page }) => {
   await instrumentAudio(page);
   await page.goto('/');
