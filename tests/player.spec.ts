@@ -89,6 +89,32 @@ test('imports a queue, edits lyrics, adjusts captions, reorders, and restores lo
   await expect(page.locator('.track-row')).toHaveCount(1);
 });
 
+test('uses KaiTi for Chinese words throughout the lyric stage', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
+  await importSongs(page);
+  await page.locator('.lyric-actions').getByRole('button', { name: 'Add lyrics' }).click();
+  await page.getByLabel('Timed lyrics').fill('[00:00.00]你好 world\n[00:04.00]下一首歌');
+  await page.getByRole('button', { name: 'Save lyrics' }).click();
+
+  const currentChinese = page.locator('.current-lyric .chinese-word');
+  const nextChinese = page.locator('.next-lyric .chinese-word');
+  const englishWord = page.locator('.current-lyric .lyric-word').filter({ hasText: 'world' });
+  await expect(currentChinese).toHaveText('你好');
+  await expect(nextChinese).toHaveText('下一首歌');
+  await expect(englishWord).toHaveText('world');
+  expect(await currentChinese.evaluate((el) => getComputedStyle(el).fontFamily)).toContain('KaiTi');
+  expect(await nextChinese.evaluate((el) => getComputedStyle(el).fontFamily)).toContain('KaiTi');
+  expect(await englishWord.evaluate((el) => getComputedStyle(el).fontFamily)).not.toContain('KaiTi');
+
+  const seek = page.getByRole('slider', { name: 'Song position' });
+  await seek.focus();
+  await page.keyboard.press('End');
+  const previousChinese = page.locator('.previous-lyric .chinese-word');
+  await expect(previousChinese).toHaveText('你好');
+  expect(await previousChinese.evaluate((el) => getComputedStyle(el).fontFamily)).toContain('KaiTi');
+});
+
 test('pause fades without removing or restarting; soften, mute, and fullscreen work', async ({ page }) => {
   await instrumentAudio(page);
   await page.goto('/');
