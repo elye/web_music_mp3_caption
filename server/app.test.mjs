@@ -5,7 +5,17 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { createApp } from './app.mjs';
 
 const ready = { transcriptionAvailable: true, engine: 'faster-whisper', model: 'base', local: true };
-const worker = (transcribe = async () => ({ lyrics: [] })) => ({ status: async () => ready, transcribe });
+const worker = (transcribe = async () => ({ lyrics: [] }), separate = async () => ({ buffer: Buffer.from('ID3mp3'), duration: 1 })) => ({
+  status: async () => ready,
+  minusOneStatus: async () => ({ minusOneAvailable: true, minusOneModel: 'htdemucs' }),
+  transcribe,
+  separate,
+});
+const song = (type = 'audio/mpeg') => {
+  const form = new FormData();
+  form.append('audio', new Blob([Buffer.from('not really an mp3')], { type }), 'song.mp3');
+  return form;
+};
 
 async function withServer(options, run) {
   const server = createApp(options).listen(0, '127.0.0.1');
@@ -92,5 +102,66 @@ test('cancelled jobs remain busy until the worker has actually exited', async ()
     await request;
     await wait(20);
     assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).busy, false);
+  });
+});
+
+test('status reports whether the local vocal remover is installed', async () => {
+  await withServer({ transcriber: worker() }, async (url) => {
+    const result = await fetch(`${url}/api/status`).then((r) => r.json());
+    assert.equal(result.minusOneAvailable, true);
+    assert.equal(result.transcriptionAvailable, true);
+  });
+  await withServer({ transcriber: { status: async () => ready, transcribe: async () => ({ lyrics: [] }) } }, async (url) => {
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).minusOneAvailable, false);
+  });
+});
+
+test('minus-one returns the local worker\'s MP3 and has no cloud fallback when not installed', async () => {
+  let received;
+  await withServer({ transcriber: worker(undefined, async ({ buffer, signal }) => {
+    received = buffer.toString();
+    assert.equal(signal.aborted, false);
+    return { buffer: Buffer.from('ID3backing'), duration: 3 };
+  }) }, async (url) => {
+    const response = await fetch(`${url}/api/minus-one`, { method: 'POST', body: song() });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'audio/mpeg');
+    assert.equal(Buffer.from(await response.arrayBuffer()).toString(), 'ID3backing');
+    assert.equal(received, 'not really an mp3');
+  });
+  await withServer({ transcriber: { ...worker(), minusOneStatus: async () => ({ minusOneAvailable: false }), separate: () => assert.fail('Must not run') } }, async (url) => {
+    assert.equal((await fetch(`${url}/api/minus-one`, { method: 'POST', body: song() })).status, 503);
+  });
+});
+
+test('minus-one validates input, rejects foreign origins, sanitizes errors, and frees the slot', async () => {
+  await withServer({ transcriber: worker(undefined, () => { throw new Error('Private absolute path or internals'); }) }, async (url) => {
+    assert.equal((await fetch(`${url}/api/minus-one`, { method: 'POST', body: song('text/plain') })).status, 400);
+    assert.equal((await fetch(`${url}/api/minus-one`, { method: 'POST', body: new FormData() })).status, 400);
+    assert.equal((await fetch(`${url}/api/minus-one`, { method: 'POST', headers: { Origin: 'https://untrusted.example' }, body: song() })).status, 403);
+    const response = await fetch(`${url}/api/minus-one`, { method: 'POST', body: song() });
+    assert.equal(response.status, 500);
+    assert.ok(!(await response.json()).error.includes('Private'));
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).busy, false);
+  });
+  await withServer({ transcriber: worker(undefined, () => { throw new Error('Local vocal removal supports songs up to 15 minutes.'); }) }, async (url) => {
+    const response = await fetch(`${url}/api/minus-one`, { method: 'POST', body: song() });
+    assert.match((await response.json()).error, /15 minutes/);
+  });
+});
+
+test('minus-one and transcription share one worker slot', async () => {
+  let release;
+  let started;
+  const began = new Promise((resolve) => { started = resolve; });
+  const exited = new Promise((resolve) => { release = resolve; });
+  await withServer({ transcriber: worker(undefined, async () => { started(); await exited; return { buffer: Buffer.from('ID3'), duration: 1 }; }) }, async (url) => {
+    const first = fetch(`${url}/api/minus-one`, { method: 'POST', body: song() });
+    await began;
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).busy, true);
+    assert.equal((await fetch(`${url}/api/transcribe`, { method: 'POST', body: body() })).status, 429);
+    assert.equal((await fetch(`${url}/api/minus-one`, { method: 'POST', body: song() })).status, 429);
+    release();
+    assert.equal((await first).status, 200);
   });
 });

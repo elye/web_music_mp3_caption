@@ -1,8 +1,8 @@
 # Chorus — sing together
 
-An **entirely local** sing-along app for small groups: local MP3s, local storage, and local Whisper transcription. Nothing is sent to a cloud service. A loopback-only helper runs on the same computer as the browser; there is no hosted backend, API key, or paid transcription service.
+An **entirely local** sing-along app for small groups: local MP3s, local storage, local Whisper transcription, and a local vocal remover for making minus-one backing tracks. Nothing is sent to a cloud service. A loopback-only helper runs on the same computer as the browser; there is no hosted backend, API key, or paid transcription service.
 
-Built with React, TypeScript, Vite, Web Audio, IndexedDB, Express, and CPU-only `faster-whisper`.
+Built with React, TypeScript, Vite, Web Audio, IndexedDB, Express, and CPU-only `faster-whisper` and Demucs.
 
 ## Run it
 
@@ -10,13 +10,13 @@ Requires **Node.js 22+**, **pnpm**, and **Python 3.10–3.13** for transcription
 
 ```sh
 pnpm install
-pnpm setup:local       # One-time dependency + multilingual base model download
+pnpm setup:local       # One-time download: Whisper base model + Demucs vocal remover (~1.5 GB total)
 pnpm dev
 ```
 
 Open **http://127.0.0.1:5173**. The dev command starts Vite and the **localhost-only** helper (port 3001). After setup, disconnect from the internet: playback, transcription, editing, and lyric export still work. Only the initial installation/model download needs internet; see the air-gapped setup below for machines that cannot connect at all.
 
-You may skip `setup:local` if you only want playback and imported/manual lyrics. Restart after changing server code or environment variables; frontend changes hot-reload. Keep the same hostname and port to retain access to your browser's saved queue.
+You may skip `setup:local` if you only want playback and imported/manual lyrics. To install only one feature, use `pnpm setup:local --skip-minus-one` (no PyTorch, much smaller) or `pnpm setup:local --skip-transcription`. Restart after changing server code or environment variables; frontend changes hot-reload. Keep the same hostname and port to retain access to your browser's saved queue.
 
 For a production build served locally:
 
@@ -47,6 +47,7 @@ Open **http://127.0.0.1:3001**. Express serves the built app and local transcrip
 | Space | Play / fade to pause; pause an auto-advance countdown |
 | M | Soften / restore |
 | F | Enter / exit fullscreen |
+| V | Switch between the original and the minus-one |
 | Left / Right | Seek backward / forward 5 seconds |
 | Escape | Close a dialog or exit fullscreen / stage view |
 
@@ -96,6 +97,23 @@ The queue-wide button processes tracks missing lyrics. If every track already ha
 - Whisper recognizes speech, not perfectly aligned singing. Backing instruments, overlapping vocals, reverberation, and instrumental breaks can produce missing or invented lyrics. **Review and correct the words and timing.** Captions are line/segment-timed, not word-highlighted. Chunk boundaries can split phrases.
 - Only use songs/lyrics you have permission to display.
 
+## Minus-one: sing over the band
+
+A **minus-one** is the song with the singer removed. Chorus makes it on your computer with Demucs (`htdemucs`) and keeps it beside the original.
+
+1. Choose **Make minus-one** in the queue. It processes songs that do not have one yet, or offers to replace them all. Or click **Minus-one** in the player when a song has none.
+2. Wait. Roughly a fraction of the song's length up to about its full length on a typical CPU. You can stop at any time; finished songs are saved, and a failed or cancelled run never removes an existing minus-one.
+   **Already have a minus-one?** In the same dialog, choose **Upload your own** next to **Generate** (when several songs are listed, use the link under each song) (MP3, WAV, M4A, OGG, FLAC, AAC, or WebM, up to 100 MB). It is saved in this browser only and never sent to the helper, so it works without `setup:local`. Chorus warns if its length differs from the original by more than 2 seconds, since it may drift out of sync with the lyrics. Downloads keep the uploaded file's format.
+3. Switch between **Original** and **Minus-one** in the player bar (or press **V**) at any time, including mid-song. Playback continues from the same place after a brief dip in sound. The choice is remembered for other songs that have a minus-one.
+
+**Download.** Choose **Download** under the stage for the original file, the minus-one MP3, and the `.lrc` lyrics. The original is exactly the file you imported.
+
+**What runs where:** the browser sends the song to `127.0.0.1` only. The helper decodes it with the bundled PyAV, separates it into drums, bass, other, and vocals, sums everything except the vocals, and encodes a 192 kbps stereo MP3 that comes back to the browser and is saved in IndexedDB. The worker has the same offline guards as transcription (network calls fail, weights load only from `.local-transcription/cache/torch/`) and its temporary files are removed after success, failure, or cancellation. Minus-one and transcription share one worker slot, so only one job runs at a time.
+
+**Limits:** songs up to **15 minutes** (memory). The default timeout is 30 minutes per song (`LOCAL_SEPARATION_TIMEOUT_SECONDS`). Separation is not perfect: faint vocal traces, backing vocals, and thinned-out centre-panned instruments can remain or be affected. The minus-one is re-encoded as a 192 kbps MP3, and a few tens of milliseconds of encoder delay can shift it slightly against the original. Only use songs you have permission to process.
+
+On Linux the default PyTorch wheel includes GPU libraries (about 2 GB). For a smaller CPU-only install, run `.local-transcription/venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu` before `pnpm setup:local`.
+
 ### Choose a local model
 
 ```sh
@@ -107,7 +125,7 @@ pnpm setup:local --model medium  # ~1.5 GB; substantially more CPU/RAM
 
 All choices are multilingual. Setup verifies offline model loading, WAV decoding, and a short inference before selecting the model; failed setup does not replace a previously selected model. Model weights remain on disk for later offline use. Recognition quality on songs is not guaranteed even with larger models.
 
-Optional `.env` settings are described in `.env.example`: CPU thread count (default 4), worker timeout, a previously downloaded model, or an existing compatible Python executable. No credentials are used.
+Optional `.env` settings are described in `.env.example`: CPU thread count (default 4), worker timeouts, a previously downloaded model, or an existing compatible Python executable. No credentials are used.
 
 ### Prepare a completely disconnected machine
 
@@ -117,11 +135,11 @@ Use a connected computer with the **same OS, CPU architecture, and Python minor 
 2. Prepare Python wheels (using the Python environment created above):
 
    ```sh
-   .local-transcription/venv/bin/python -m pip download -r server/requirements-local.txt --dest offline-wheels
+   .local-transcription/venv/bin/python -m pip download -r server/requirements-local.txt -r server/requirements-minus-one.txt --dest offline-wheels
    ```
 
    On Windows, use `.local-transcription/venv/Scripts/python.exe` instead.
-3. Copy the project, including `dist/`, `node_modules/`, `.local-transcription/models/`, and `offline-wheels/`, to the disconnected computer. Include its source files and package files. Do **not** rely on copying the virtual environment: virtual environments contain machine-specific paths. Install Node, pnpm, and a matching Python on the target in advance.
+3. Copy the project, including `dist/`, `node_modules/`, `.local-transcription/models/`, `.local-transcription/cache/torch/` (the Demucs weights), and `offline-wheels/`, to the disconnected computer. Include its source files and package files. Do **not** rely on copying the virtual environment: virtual environments contain machine-specific paths. Install Node, pnpm, and a matching Python on the target in advance.
 4. On the disconnected computer:
 
    ```sh
@@ -133,7 +151,7 @@ The `--offline` flag uses pip's `--no-index`, never calls the model registry, an
 
 ## Local storage and deployment boundaries
 
-Audio blobs, lyrics, and order are saved in **IndexedDB** under the browser origin. Preferences use `localStorage`. Nothing is synced to an account. Browser storage is best-effort: private browsing, low disk space, eviction, clearing site data, or switching browsers/origins may remove or hide the queue. Storage failures are reported and session playback remains available. Keep original MP3s and export valuable LRC edits. Multiple open tabs are not synchronized; use one leader tab per session.
+Audio blobs (original and minus-one), lyrics, and order are saved in **IndexedDB** under the browser origin. Preferences use `localStorage`. Nothing is synced to an account. Browser storage is best-effort: private browsing, low disk space, eviction, clearing site data, or switching browsers/origins may remove or hide the queue. Storage failures are reported and session playback remains available. Keep original MP3s and export valuable LRC edits. Multiple open tabs are not synchronized; use one leader tab per session.
 
 The server binds to **127.0.0.1**, not your network interfaces. The shipped app is intended to run on the leader's computer and project/mirror that screen. It does **not** synchronize separate audience devices.
 
@@ -165,12 +183,16 @@ src/lib/audio.ts                Persistent audio element and gain ramps
 src/lib/lyrics.ts               LRC/SRT/WebVTT parsing, export, lyric lookup
 src/lib/storage.ts              IndexedDB audio/lyrics and local preferences
 src/lib/transcription.ts        Audio preparation and transcription chunks
+src/lib/minusOne.ts             Minus-one request and file downloads
 src/lib/demo.ts                 Original synthesized soundcheck
 src/components/LyricsEditor.tsx Import, edit, timestamp, export
 src/components/TranscriptionDialog.tsx  Consent and batch progress
-server/app.mjs                  Loopback-only local transcription endpoint
+src/components/MinusOneDialog.tsx       Minus-one generation
+src/components/DownloadDialog.tsx       Original, minus-one, and LRC downloads
+server/app.mjs                  Loopback-only transcription and minus-one endpoints
 server/local-transcriber.mjs    Worker lifecycle, cancellation, temporary-file cleanup
 server/transcribe_local.py      Offline-only CPU Whisper inference
+server/separate_local.py        Offline-only CPU Demucs vocal removal
 scripts/setup_local.py          Explicit one-time download / air-gapped setup
 server/index.mjs                Localhost app server with local-only production CSP
 ```

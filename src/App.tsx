@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
-  ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, CloudOff, FileText, Headphones, ListMusic,
+  ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, CloudOff, Disc3, Download, FileText, Headphones, ListMusic,
   LoaderCircle, Maximize, Minimize, Music2, Pause, Play, Plus, Repeat2, RotateCcw,
   Settings2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Upload, Volume1, Volume2, VolumeX, Waves, X,
 } from 'lucide-react';
@@ -16,6 +16,8 @@ import { FadeThrough } from './components/FadeThrough';
 import { Modal } from './components/Modal';
 import { Settings } from './components/Settings';
 import { TranscriptionDialog } from './components/TranscriptionDialog';
+import { MinusOneDialog } from './components/MinusOneDialog';
+import { DownloadDialog } from './components/DownloadDialog';
 
 function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -28,6 +30,8 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [transcribeIds, setTranscribeIds] = useState<string[] | null>(null);
+  const [minusOneIds, setMinusOneIds] = useState<string[] | null>(null);
+  const [downloadOpen, setDownloadOpen] = useState(false);
   const [removeId, setRemoveId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; kind?: 'error' | 'success' } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -53,10 +57,12 @@ function App() {
   const lyricWin = active ? lyricWindow(active.lyrics, time, active.offset, lyricLead) : null;
   const lyricMs = active && lyricWin ? lyricTransitionMs(active.lyrics, lyricWin, time, active.offset, lyricLead) : 700;
   const hasLyrics = Boolean(active?.lyrics.some((line) => line.text));
+  // The version actually audible: the minus-one only exists for songs it has been generated for.
+  const usingMinusOne = Boolean(active?.minusOne && preferences.minusOne);
   const isPresenting = fullscreen || stageOnly;
   // What the stage is showing; when this changes the content fades out and the new content fades in.
   const stageView = !active ? 'welcome' : gap ? 'gap' : finished ? 'finished' : !hasLyrics ? `bare:${active.id}` : `lyrics:${active.id}`;
-  const modalOpen = settingsOpen || editing || Boolean(transcribeIds) || Boolean(removeId);
+  const modalOpen = settingsOpen || editing || Boolean(transcribeIds) || Boolean(minusOneIds) || downloadOpen || Boolean(removeId);
 
   const notify = useCallback((text: string, kind?: 'error' | 'success') => setNotice({ text, kind }), []);
   const storageError = useCallback(() => notify('Your browser could not save this change. It still works for this session; export important lyrics before closing.', 'error'), [notify]);
@@ -65,6 +71,12 @@ function App() {
     transitionTimer.current = undefined;
     setGap(null);
   }, []);
+
+  const chooseVersion = useCallback((minusOne: boolean) => {
+    if (!active) return;
+    if (minusOne && !active.minusOne) { setMinusOneIds([active.id]); return; }
+    setPreferences((value) => ({ ...value, minusOne }));
+  }, [active]);
 
   const play = useCallback(() => {
     void engine.play().catch((error: unknown) => {
@@ -94,9 +106,18 @@ function App() {
   useEffect(() => {
     engine.fadeSeconds = preferences.fade;
     engine.setVolume(preferences.volume);
+    engine.preferMinusOne = preferences.minusOne;
     try { storePreferences(preferences); } catch { /* Audio remains usable when browser storage is blocked. */ }
   }, [engine, preferences]);
   useEffect(() => { engine.setSoftened(softened); }, [engine, softened]);
+  // Switch between the original and the minus-one without losing the place in the song.
+  useEffect(() => {
+    if (!active || !engine.currentBlob) return;
+    const wanted = engine.sourceFor(active);
+    if (wanted !== engine.currentBlob) {
+      void engine.swap(wanted).catch(() => notify('Playback could not continue after switching versions. Press Play again.', 'error'));
+    }
+  }, [active, engine, notify, preferences.minusOne]);
   useEffect(() => { if (ready) void storeOrder(tracks.map((track) => track.id)).catch(storageError); }, [tracks, ready, storageError]);
   useEffect(() => {
     if (!notice || notice.kind === 'error') return;
@@ -201,17 +222,23 @@ function App() {
       if (event.code === 'Space') { event.preventDefault(); togglePlayback(); }
       else if (event.key.toLowerCase() === 'm') setSoftened((value) => !value);
       else if (event.key.toLowerCase() === 'f') void toggleFullscreen();
+      else if (event.key.toLowerCase() === 'v' && active) chooseVersion(!usingMinusOne);
       else if (event.key === 'ArrowLeft' && active) { event.preventDefault(); cancelGap(); engine.seek(time - 5); }
       else if (event.key === 'ArrowRight' && active) { event.preventDefault(); cancelGap(); engine.seek(Math.min(actualDuration - 0.1, time + 5)); }
       else if (event.key === 'Escape') setStageOnly(false);
     };
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
-  }, [active, actualDuration, cancelGap, engine, modalOpen, time, toggleFullscreen, togglePlayback]);
+  }, [active, actualDuration, cancelGap, chooseVersion, engine, modalOpen, time, toggleFullscreen, togglePlayback, usingMinusOne]);
 
   function updateTrack(updated: Track) {
     setTracks((current) => current.map((track) => track.id === updated.id ? updated : track));
     void storeTrack(updated).catch(storageError);
+  }
+
+  function saveMinusOne(id: string, minusOne: Blob) {
+    const track = tracks.find((item) => item.id === id);
+    if (track) updateTrack({ ...track, minusOne });
   }
 
   function saveTranscription(id: string, lyrics: LyricLine[]) {
@@ -318,7 +345,7 @@ function App() {
           {tracks.map((track, index) => <li key={track.id} className={`track-row ${track.id === activeId ? 'selected' : ''}`}>
             <button className="track-select" onClick={() => { if (track.id !== activeId) afterFadeOut(() => selectTrack(track, playing || Boolean(gap))); }} aria-label={`Select ${track.title}`} aria-current={track.id === activeId ? 'true' : undefined}>
               <span className={`track-number ${track.id === activeId && playing ? 'is-playing' : ''}`}>{track.id === activeId && playing ? <span className="equalizer"><i /><i /><i /></span> : String(index + 1).padStart(2, '0')}</span>
-              <span className="track-details"><strong>{track.title}</strong><small>{track.lyrics.some((line) => line.text) ? <><span className="lyrics-dot" /> Lyrics ready</> : <><span className="lyrics-dot pending" /> Needs lyrics</>}<span className="track-duration">{formatTime(track.duration)}</span></small></span>
+              <span className="track-details"><strong>{track.title}</strong><small>{track.lyrics.some((line) => line.text) ? <><span className="lyrics-dot" /> Lyrics ready</> : <><span className="lyrics-dot pending" /> Needs lyrics</>}{track.minusOne && <span className="minus-one-badge" title="Minus-one ready">Minus-one</span>}<span className="track-duration">{formatTime(track.duration)}</span></small></span>
             </button>
             <div className="track-actions"><button className="tiny-button" disabled={index === 0} aria-label={`Move ${track.title} up`} onClick={() => moveTrack(index, -1)}><ArrowUp size={13} /></button><button className="tiny-button" disabled={index === tracks.length - 1} aria-label={`Move ${track.title} down`} onClick={() => moveTrack(index, 1)}><ArrowDown size={13} /></button><button className="tiny-button remove" disabled={track.id === activeId && playing} title={track.id === activeId && playing ? 'Pause before removing the current song' : 'Remove from queue'} aria-label={`Remove ${track.title}`} onClick={() => setRemoveId(track.id)}><X size={14} /></button></div>
           </li>)}
@@ -326,7 +353,8 @@ function App() {
         {!tracks.length && <div className="empty-queue"><ListMusic size={25} strokeWidth={1.3} /><p>One song or a whole evening.<br /> We’ll keep the music moving.</p></div>}
         <div className="queue-bottom">
           <button className="button transcription-button" disabled={!tracks.length} onClick={() => setTranscribeIds(tracks.filter((track) => !track.lyrics.length).map((track) => track.id).length ? tracks.filter((track) => !track.lyrics.length).map((track) => track.id) : tracks.map((track) => track.id))}><Sparkles size={17} /><span>Generate lyrics</span><span className="ai-label">LOCAL</span></button>
-          <p className="privacy-caption"><ShieldCheck size={13} /> Music & transcription stay on this computer.</p>
+          <button className="button transcription-button" disabled={!tracks.length} onClick={() => { const missing = tracks.filter((track) => !track.minusOne).map((track) => track.id); setMinusOneIds(missing.length ? missing : tracks.map((track) => track.id)); }}><Disc3 size={17} /><span>Make minus-one</span><span className="ai-label">LOCAL</span></button>
+          <p className="privacy-caption"><ShieldCheck size={13} /> Music, lyrics & backing tracks stay on this computer.</p>
         </div>
       </aside>
 
@@ -346,15 +374,15 @@ function App() {
               {nextLine && <span className="lyrics-count-in">Words in {Math.max(1, Math.ceil(nextLine.start + active.offset - time))}s</span>}
             </>} />}
           </FadeThrough>
-          <div className="stage-bottomline"><span>{active ? <><Music2 size={13} /> {active.title}</> : <><Waves size={15} /> A space for every voice</>}</span><div className="stage-caption-tools"><button aria-label="Smaller lyrics" disabled={preferences.fontSize <= 32} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.max(32, value.fontSize - 4) }))}>A<span>−</span></button><span className="caption-tool-divider" /><button aria-label="Larger lyrics" disabled={preferences.fontSize >= 88} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.min(88, value.fontSize + 4) }))}>A<span>+</span></button></div></div>
+          <div className="stage-bottomline"><span>{active ? <><Music2 size={13} /> {active.title}{usingMinusOne && <span className="stage-version">Minus-one</span>}</> : <><Waves size={15} /> A space for every voice</>}</span><div className="stage-caption-tools"><button aria-label="Smaller lyrics" disabled={preferences.fontSize <= 32} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.max(32, value.fontSize - 4) }))}>A<span>−</span></button><span className="caption-tool-divider" /><button aria-label="Larger lyrics" disabled={preferences.fontSize >= 88} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.min(88, value.fontSize + 4) }))}>A<span>+</span></button></div></div>
         </section>
-        <div className="under-stage"><div className="stage-note"><span className="note-dot" /><span>{hasLyrics ? `${active?.lyrics.filter((line) => line.text).length} lines · ${active?.lyricSource === 'transcribed' ? 'AI lyrics — please review' : 'Timed lyrics ready'}` : 'Big words. Shared moments. No page-turning.'}</span></div><div className="lyric-actions">{active && hasLyrics && <div className="offset-controls"><span>Lyric delay</span><button aria-label="Show lyrics 0.5 seconds earlier" onClick={() => updateTrack({ ...active, offset: Math.max(-30, Math.round((active.offset - 0.5) * 10) / 10) })}>−</button><span className="mono" title="Positive values show lyrics later">{active.offset > 0 ? '+' : ''}{active.offset.toFixed(1)}s</span><button aria-label="Show lyrics 0.5 seconds later" onClick={() => updateTrack({ ...active, offset: Math.min(30, Math.round((active.offset + 0.5) * 10) / 10) })}>+</button></div>}{active && <button className="text-button" onClick={() => setEditing(true)}><FileText size={14} />{hasLyrics ? 'Edit lyrics' : 'Add lyrics'}</button>}</div></div>
+        <div className="under-stage"><div className="stage-note"><span className="note-dot" /><span>{hasLyrics ? `${active?.lyrics.filter((line) => line.text).length} lines · ${active?.lyricSource === 'transcribed' ? 'AI lyrics — please review' : 'Timed lyrics ready'}` : 'Big words. Shared moments. No page-turning.'}</span></div><div className="lyric-actions">{active && hasLyrics && <div className="offset-controls"><span>Lyric delay</span><button aria-label="Show lyrics 0.5 seconds earlier" onClick={() => updateTrack({ ...active, offset: Math.max(-30, Math.round((active.offset - 0.5) * 10) / 10) })}>−</button><span className="mono" title="Positive values show lyrics later">{active.offset > 0 ? '+' : ''}{active.offset.toFixed(1)}s</span><button aria-label="Show lyrics 0.5 seconds later" onClick={() => updateTrack({ ...active, offset: Math.min(30, Math.round((active.offset + 0.5) * 10) / 10) })}>+</button></div>}{active && <button className="text-button" onClick={() => setDownloadOpen(true)}><Download size={14} />Download</button>}{active && <button className="text-button" onClick={() => setEditing(true)}><FileText size={14} />{hasLyrics ? 'Edit lyrics' : 'Add lyrics'}</button>}</div></div>
         <div className="feature-strip"><div><span className="feature-icon"><ListMusic size={19} /></span><span><strong>One seamless queue</strong><small>From the first song to the last.</small></span></div><div><span className="feature-icon"><Volume1 size={20} /></span><span><strong>A gentler kind of pause</strong><small>Fade out. Take a breath. Carry on.</small></span></div><div><span className="feature-icon"><CloudOff size={18} /></span><span><strong>At home on your device</strong><small>Your files. Your gathering.</small></span></div></div>
       </section>
     </main>
 
     <footer className="player" aria-label="Playback controls">
-      <div className="player-song"><span className={`album-art ${playing ? 'album-playing' : ''}`}><AudioLines size={25} /></span><div><strong>{active?.title ?? 'Your next sing-along starts here'}</strong><small>{gap ? `Next song in ${gap.remaining}s` : fading ? 'Fading gently… your song stays in the queue' : softened ? 'Music softened · your place is kept' : active?.artist || (active ? 'Ready when you are' : 'Add a few songs to get things going')}</small></div></div>
+      <div className="player-song"><span className={`album-art ${playing ? 'album-playing' : ''}`}><AudioLines size={25} /></span><div><strong>{active?.title ?? 'Your next sing-along starts here'}</strong><small>{gap ? `Next song in ${gap.remaining}s` : fading ? 'Fading gently… your song stays in the queue' : softened ? 'Music softened · your place is kept' : active?.artist || (active ? 'Ready when you are' : 'Add a few songs to get things going')}</small>{active && <div className="version-toggle" role="group" aria-label="Playback version"><button aria-pressed={!usingMinusOne} onClick={() => chooseVersion(false)}>Original</button><button aria-pressed={usingMinusOne} title={active.minusOne ? 'Vocals removed · V' : 'Make a minus-one for this song'} onClick={() => chooseVersion(true)}>Minus-one</button></div>}</div></div>
       <div className="transport"><div className="transport-buttons"><button className={`icon-button repeat-button ${preferences.repeat ? 'enabled' : ''}`} aria-label="Repeat queue" aria-pressed={preferences.repeat} onClick={() => setPreferences((value) => ({ ...value, repeat: !value.repeat }))}><Repeat2 size={18} /></button><button className="icon-button" aria-label="Previous song or restart" disabled={!active} onClick={previousTrack}><SkipBack size={21} fill="currentColor" /></button><button className={`play-button ${fading ? 'fading' : ''}`} aria-label={gap ? 'Pause auto-advance' : playing && !fading ? 'Pause with fade' : 'Play'} disabled={!active} onClick={togglePlayback}>{gap || (playing && !fading) ? <Pause size={23} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</button><button className="icon-button" aria-label="Next song" disabled={!active || (activeIndex === tracks.length - 1 && !preferences.repeat)} onClick={nextTrack}><SkipForward size={21} fill="currentColor" /></button><span className="transport-spacer" /></div><div className="seek-row"><span>{formatTime(time)}</span><input type="range" aria-label="Song position" aria-valuetext={`${formatTime(time)} of ${formatTime(actualDuration)}`} min={0} max={actualDuration || 1} step={0.1} value={Math.min(time, actualDuration || 1)} disabled={!active || !duration} style={{ '--progress': `${actualDuration ? time / actualDuration * 100 : 0}%` } as CSSProperties} onChange={(event) => { cancelGap(); setFinished(false); engine.seek(Number(event.target.value)); }} /><span>{formatTime(actualDuration)}</span></div></div>
       <div className="volume-controls"><button className={`soften-button ${softened ? 'softened' : ''}`} disabled={!active} aria-pressed={softened} title="Gently lower music to 22% · M" onClick={() => setSoftened((value) => !value)}><Waves size={17} /><span>{softened ? 'Restore' : 'Soften'}</span></button><div className="volume-slider">{preferences.volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}<input type="range" min={0} max={1} step={0.01} value={preferences.volume} aria-label="Volume" aria-valuetext={`${Math.round(preferences.volume * 100)} percent`} style={{ '--progress': `${preferences.volume * 100}%` } as CSSProperties} onChange={(event) => setPreferences((value) => ({ ...value, volume: Number(event.target.value) }))} /></div></div>
     </footer>
@@ -365,7 +393,9 @@ function App() {
     {settingsOpen && <Settings preferences={preferences} onChange={setPreferences} onClose={() => setSettingsOpen(false)} />}
     {editing && active && <LyricsEditor track={active} time={time} playing={playing && !fading} onToggle={togglePlayback} onSave={updateTrack} onClose={() => setEditing(false)} />}
     {transcribeIds && <TranscriptionDialog tracks={tracks.filter((track) => transcribeIds.includes(track.id))} onSave={saveTranscription} onClose={() => setTranscribeIds(null)} />}
-    {removeId && <Modal title="Remove this song?" subtitle={tracks.find((track) => track.id === removeId)?.title} onClose={() => setRemoveId(null)}><p className="remove-explanation">This removes the song and its saved lyrics from this browser’s queue. It does not delete your original audio file.</p><footer className="modal-footer"><button className="button secondary" onClick={() => setRemoveId(null)}>Keep song</button><button className="button danger" onClick={confirmRemove}><Trash2 size={16} /> Remove song</button></footer></Modal>}
+    {minusOneIds && <MinusOneDialog tracks={tracks.filter((track) => minusOneIds.includes(track.id))} onSave={saveMinusOne} onClose={() => setMinusOneIds(null)} />}
+    {downloadOpen && active && <DownloadDialog track={active} onMakeMinusOne={() => { setDownloadOpen(false); setMinusOneIds([active.id]); }} onClose={() => setDownloadOpen(false)} />}
+    {removeId && <Modal title="Remove this song?" subtitle={tracks.find((track) => track.id === removeId)?.title} onClose={() => setRemoveId(null)}><p className="remove-explanation">This removes the song, its minus-one, and its saved lyrics from this browser’s queue. It does not delete your original audio file.</p><footer className="modal-footer"><button className="button secondary" onClick={() => setRemoveId(null)}>Keep song</button><button className="button danger" onClick={confirmRemove}><Trash2 size={16} /> Remove song</button></footer></Modal>}
     {isPresenting && <button className="presenting-hint" onClick={() => void toggleFullscreen()}><ChevronDown size={15} /> Back to your room</button>}
   </div>;
 }

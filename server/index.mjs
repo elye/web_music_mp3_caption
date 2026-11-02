@@ -23,5 +23,6 @@ app.listen(port, '127.0.0.1', async () => {
   console.log(`Chorus localhost${existsSync(dist) ? ' + app' : ''}: http://127.0.0.1:${port}`);
   const status = await transcriber.status();
   console.log(`Local transcription: ${status.message}`);
+  console.log(`Local minus-one: ${(await transcriber.minusOneStatus()).minusOneMessage}`);
   console.log('Audio processing stays on this computer. No cloud fallback or API key.');
 });

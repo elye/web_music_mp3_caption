@@ -3,6 +3,8 @@ import multer from 'multer';
 import { createLocalTranscriber } from './local-transcriber.mjs';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 24 * 1024 * 1024, files: 1, fields: 1 } });
+const songUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1, fields: 0 } });
+const isAudio = (file) => file && file.size > 0 && /^(audio\/|video\/webm$|application\/octet-stream$)/.test(file.mimetype);
 const pcmWav = (file) => file && /^audio\/(wav|x-wav|wave)$/.test(file.mimetype)
   && file.buffer.length >= 44 && file.buffer.toString('ascii', 0, 4) === 'RIFF'
   && file.buffer.toString('ascii', 8, 12) === 'WAVE';
@@ -16,11 +18,15 @@ export function createApp({ transcriber = createLocalTranscriber(), port = Numbe
   app.use('/api', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     if (req.get('origin') && !allowedOrigins.has(req.get('origin'))) {
-      return res.status(403).json({ error: 'Only the local Chorus app can use transcription.' });
+      return res.status(403).json({ error: 'Only the local Chorus app can use this helper.' });
     }
     next();
   });
-  app.get('/api/status', async (_req, res) => res.json({ ...await transcriber.status(), busy }));
+  app.get('/api/status', async (_req, res) => res.json({
+    ...await transcriber.status(),
+    ...(await transcriber.minusOneStatus?.() ?? { minusOneAvailable: false }),
+    busy,
+  }));
   app.post('/api/transcribe', async (req, res) => {
     if (!(await transcriber.status()).transcriptionAvailable) {
       return res.status(503).json({ error: 'Local transcription is not ready. Run pnpm setup:local once. No cloud service is used.' });
@@ -49,6 +55,35 @@ export function createApp({ transcriber = createLocalTranscriber(), port = Numbe
         ? error.message : 'Local transcription failed. Check the installed model and try again.' });
     } finally {
       // The worker resolves/rejects only after it exits, including cancellation.
+      busy = false;
+      res.removeListener('close', onClose);
+    }
+  });
+  app.post('/api/minus-one', async (req, res) => {
+    const status = await transcriber.minusOneStatus?.();
+    if (!status?.minusOneAvailable) {
+      return res.status(503).json({ error: 'Local vocal removal is not ready. Run pnpm setup:local once. No cloud service is used.' });
+    }
+    if (busy) return res.status(429).json({ error: 'This computer is already processing a song. Wait for it to finish or stop it first.' });
+    busy = true;
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.once('close', onClose);
+    try {
+      await new Promise((resolve, reject) => songUpload.single('audio')(req, res, (error) => error ? reject(error) : resolve()));
+      if (!isAudio(req.file)) return res.status(400).json({ error: 'Provide an audio file from the local app.' });
+      controller.signal.throwIfAborted();
+      const result = await transcriber.separate({ buffer: req.file.buffer, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', result.buffer.length);
+      return res.end(result.buffer);
+    } catch (error) {
+      if (res.destroyed || controller.signal.aborted) return;
+      if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Songs must be under 100 MB.' : 'The local audio transfer could not be read.' });
+      return res.status(500).json({ error: /^(The local|Local vocal|Could not start)/.test(error.message ?? '')
+        ? error.message : 'Local vocal removal failed. Check the installation and try again.' });
+    } finally {
       busy = false;
       res.removeListener('close', onClose);
     }

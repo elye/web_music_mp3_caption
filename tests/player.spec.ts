@@ -200,6 +200,139 @@ test('local model setup is honest and timed subtitle import works without a mode
   await expect(page.locator('.current-lyric')).toHaveText('Sing together');
 });
 
+test('makes a minus-one on request, switches versions mid-song, downloads both, and remembers the choice', async ({ page }) => {
+  let requests = 0;
+  const backing = wav(12);
+  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: false, minusOneAvailable: true } }));
+  await page.route('**/api/minus-one', (route) => { requests++; return route.fulfill({ body: backing, contentType: 'audio/wav' }); });
+  await instrumentAudio(page);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
+  await importSongs(page, 12);
+  expect(requests).toBe(0);
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.queue-bottom').getByRole('button', { name: 'Make minus-one' }).click();
+  await expect(page.getByText('On your computer. Not in the cloud.')).toBeVisible();
+  expect(requests).toBe(0);
+  await page.getByRole('button', { name: 'Generate for 2 songs' }).click();
+  await expect(page.getByText(/^Finished\./)).toBeVisible();
+  expect(requests).toBe(2);
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(page.locator('.minus-one-badge')).toHaveCount(2);
+  // Generating does not change what is playing.
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect.poll(() => audioPaused(page)).toBe(false);
+  const source = () => page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.src);
+  const original = await source();
+  await page.evaluate(() => { (window as unknown as { testAudio: HTMLMediaElement }).testAudio.currentTime = 5; });
+  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(source).not.toBe(original);
+  // Same place in the song, still playing.
+  await expect.poll(() => page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.currentTime)).toBeGreaterThan(4.9);
+  await expect.poll(() => audioPaused(page)).toBe(false);
+  await expect(page.locator('.stage-version')).toHaveText('Minus-one');
+  const backingSource = await source();
+  // Shortcuts ignore focused buttons, as with the other keys.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('v');
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(source).not.toBe(backingSource);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.currentTime)).toBeGreaterThan(4.9);
+  await page.keyboard.press('v');
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.locator('.lyric-actions').getByRole('button', { name: 'Download' }).click();
+  const [originalDownload] = await Promise.all([page.waitForEvent('download'), page.locator('.download-list li').filter({ hasText: 'Original' }).getByRole('button', { name: 'Download' }).click()]);
+  expect(originalDownload.suggestedFilename()).toBe('The Group - First song.wav');
+  expect(readFileSync((await originalDownload.path())!).length).toBe(wav(12).length);
+  const [backingDownload] = await Promise.all([page.waitForEvent('download'), page.locator('.download-list li').filter({ hasText: 'Minus-one' }).getByRole('button', { name: 'Download' }).click()]);
+  expect(backingDownload.suggestedFilename()).toBe('The Group - First song (minus-one).mp3');
+  expect(readFileSync((await backingDownload.path())!).equals(backing)).toBe(true);
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+
+  await page.reload();
+  await expect(page.locator('.track-row')).toHaveCount(2);
+  await expect(page.locator('.minus-one-badge')).toHaveCount(2);
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect.poll(() => audioPaused(page)).toBe(false);
+});
+
+test('a failed minus-one keeps the original, and the switch offers to make one', async ({ page }) => {
+  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: false, minusOneAvailable: true } }));
+  await page.route('**/api/minus-one', (route) => route.fulfill({ status: 500, json: { error: 'The local vocal remover failed.' } }));
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
+  await importSongs(page, 5);
+  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await page.getByRole('button', { name: 'Generate for this song' }).waitFor();
+  await expect(page.getByRole('button', { name: 'Generate for 2 songs' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Generate for this song' }).click();
+  await expect(page.getByText('The local vocal remover failed.')).toBeVisible();
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await expect(page.locator('.minus-one-badge')).toHaveCount(0);
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.lyric-actions').getByRole('button', { name: 'Download' }).click();
+  await expect(page.locator('.download-list li').filter({ hasText: 'Minus-one' }).getByRole('button', { name: 'Make minus-one' })).toBeVisible();
+  await expect(page.locator('.download-list li').filter({ hasText: 'Lyrics' }).getByRole('button', { name: 'Download' })).toBeDisabled();
+});
+
+test('uploads your own minus-one without the helper, warns about length, and rejects bad files', async ({ page }) => {
+  let requests = 0;
+  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: false, minusOneAvailable: false } }));
+  await page.route('**/api/minus-one', (route) => { requests++; return route.abort(); });
+  await instrumentAudio(page);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
+  await importSongs(page, 12);
+  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await expect(page.getByText('One-time local setup needed')).toBeVisible();
+  const upload = {
+    setInputFiles: async (file: { name: string; mimeType: string; buffer: Buffer }) => {
+      const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: /^Upload (your own|a different one)/ }).click()]);
+      await chooser.setFiles(file);
+    },
+  };
+
+  await upload.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+  await expect(page.getByText(/notes\.txt: Unsupported audio format/)).toBeVisible();
+  await upload.setInputFiles({ name: 'broken.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('not audio at all') });
+  await expect(page.getByText(/broken\.mp3: This audio file could not be read/)).toBeVisible();
+  await expect(page.locator('.minus-one-badge')).toHaveCount(0);
+
+  await upload.setInputFiles({ name: 'karaoke take.wav', mimeType: 'audio/wav', buffer: wav(5) });
+  await expect(page.getByText(/7s shorter than the original/)).toBeVisible();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  expect(requests).toBe(0);
+  await expect(page.locator('.minus-one-badge')).toHaveCount(1);
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  const source = () => page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.src);
+  const original = await source();
+  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await expect.poll(source).not.toBe(original);
+  await expect.poll(() => audioPaused(page)).toBe(false);
+
+  await page.locator('.lyric-actions').getByRole('button', { name: 'Download' }).click();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('.download-list li').filter({ hasText: 'Minus-one' }).getByRole('button', { name: 'Download' }).click()]);
+  expect(download.suggestedFilename()).toBe('The Group - First song (minus-one).wav');
+  expect(readFileSync((await download.path())!).equals(wav(5))).toBe(true);
+});
+
+test('minus-one setup is honest when the vocal remover is not installed', async ({ page }) => {
+  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: true, minusOneAvailable: false } }));
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
+  await importSongs(page, 5);
+  await page.locator('.queue-bottom').getByRole('button', { name: 'Make minus-one' }).click();
+  await expect(page.getByText('One-time local setup needed')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Generate for/ })).toBeDisabled();
+});
+
 test('plays an actual MP3 file', async ({ page }) => {
   let ffmpeg = true;
   try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); } catch { ffmpeg = false; }

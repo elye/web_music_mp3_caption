@@ -8,6 +8,10 @@ export class AudioEngine {
   private context?: AudioContext;
   private gain?: GainNode;
   private objectUrl?: string;
+  /** The blob currently loaded into the audio element. */
+  currentBlob?: Blob;
+  /** Songs with a minus-one version play it instead of the original. */
+  preferMinusOne = false;
   private pauseTimer?: ReturnType<typeof setTimeout>;
   private seekTimer?: ReturnType<typeof setTimeout>;
   private seekMuted = false;
@@ -75,6 +79,11 @@ export class AudioEngine {
     }, 80);
   };
 
+  /** The version of a song that should be audible right now. */
+  sourceFor(track: Track): Blob {
+    return this.preferMinusOne && track.minusOne ? track.minusOne : track.file;
+  }
+
   load(track: Track) {
     this.sequence++;
     this.cancelFade();
@@ -83,9 +92,51 @@ export class AudioEngine {
     this.audio.pause();
     this.ramp(0, 0);
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
-    this.objectUrl = URL.createObjectURL(track.file);
+    this.currentBlob = this.sourceFor(track);
+    this.objectUrl = URL.createObjectURL(this.currentBlob);
     this.audio.src = this.objectUrl;
     this.audio.load();
+    this.onChange();
+  }
+
+  /**
+   * Switches to another version of the same song without losing the place. If it was playing,
+   * the sound dips for a moment, then resumes at the same position.
+   */
+  async swap(blob: Blob) {
+    if (blob === this.currentBlob) return;
+    const sequence = ++this.sequence;
+    this.cancelFade();
+    this.cancelSeekMute();
+    const wasPlaying = !this.audio.paused && !this.audio.ended;
+    const position = this.audio.currentTime;
+    this.fading = false;
+    if (wasPlaying) {
+      this.ramp(0, 0.06);
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      if (sequence !== this.sequence) return;
+    }
+    this.audio.pause();
+    const url = URL.createObjectURL(blob);
+    if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
+    this.objectUrl = url;
+    this.currentBlob = blob;
+    this.audio.src = url;
+    this.audio.load();
+    await new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); this.audio.removeEventListener('loadedmetadata', done); this.audio.removeEventListener('error', done); resolve(); };
+      const timer = setTimeout(done, 10000);
+      this.audio.addEventListener('loadedmetadata', done);
+      this.audio.addEventListener('error', done);
+    });
+    // Restore the position even if the user paused meanwhile; another load() owns the element otherwise.
+    if (this.objectUrl !== url) return;
+    if (position > 0 && Number.isFinite(this.audio.duration)) this.audio.currentTime = Math.min(position, this.audio.duration);
+    this.onChange();
+    if (!wasPlaying || sequence !== this.sequence) return;
+    await this.audio.play();
+    if (sequence !== this.sequence) return;
+    this.ramp(softenedGain(this.volume, this.softened), 0.12);
     this.onChange();
   }
 
@@ -159,6 +210,7 @@ export class AudioEngine {
     this.audio.load();
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
     this.objectUrl = undefined;
+    this.currentBlob = undefined;
     this.onChange();
   }
 

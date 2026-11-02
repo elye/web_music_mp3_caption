@@ -1,0 +1,9 @@
+# Vocal remover ("minus-one"). Installed into the project-local virtual environment, never global Python.
+# On Linux, the default torch wheel includes CUDA libraries (~2 GB). For a smaller CPU-only install, run:
+#   .local-transcription/venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+# before pnpm setup:local.
+demucs==4.0.1
+torch>=2.1,<3
+numpy
+# Same PyAV release as requirements-local.txt; it decodes MP3/M4A/OGG/FLAC/etc.
+av==16.0.1
