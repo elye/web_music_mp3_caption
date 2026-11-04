@@ -55,8 +55,20 @@ test('recognizes locally synthesized speech without any cloud service', { timeou
       context.skip('Install a local Samantha voice and ffmpeg to run the optional spoken fixture test. No voice is downloaded by this test.');
       return;
     }
+    const speech = await readFile(join(temp, 'speech.wav'));
+    let sampleBytes = 0;
+    for (let offset = 12; offset + 8 <= speech.length;) {
+      const size = speech.readUInt32LE(offset + 4);
+      if (speech.toString('ascii', offset, offset + 4) === 'data') { sampleBytes = size; break; }
+      if (offset + 8 + size > speech.length) break;
+      offset += 8 + size + (size % 2);
+    }
+    if (sampleBytes === 0) {
+      context.skip('The installed Samantha voice produced an empty WAV; no speech was synthesized.');
+      return;
+    }
     const start = performance.now();
-    const result = await transcriber.transcribe({ buffer: await readFile(join(temp, 'speech.wav')), language: 'en' });
+    const result = await transcriber.transcribe({ buffer: speech, language: 'en' });
     const text = result.lyrics.map((line) => line.text).join(' ');
     assert.match(text, /sing|voice|welcome|group/i);
     assert.ok(result.lyrics.every((line) => line.start >= 0 && line.end > line.start));

@@ -15,7 +15,7 @@ FILES = ("model.bin", "config.json", "tokenizer.json")
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=MODELS, default="base", help="Multilingual Whisper model (default: base, about 145 MB).")
+    parser.add_argument("--model", choices=MODELS, default="small", help="Multilingual Whisper model (default: small, about 490 MB).")
     parser.add_argument("--skip-transcription", action="store_true", help="Do not install or change the Whisper lyrics model.")
     parser.add_argument("--skip-minus-one", action="store_true", help="Do not install the Demucs vocal remover (about 1 GB with PyTorch).")
     parser.add_argument("--offline", action="store_true", help="Never contact a package or model registry.")

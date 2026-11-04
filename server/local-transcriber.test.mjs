@@ -10,7 +10,7 @@ async function fixture(run) {
   const root = await mkdtemp(join(tmpdir(), 'chorus-worker-test-'));
   const local = join(root, '.local-transcription');
   const python = join(local, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
-  const model = join(local, 'models', 'base');
+  const model = join(local, 'models', 'small');
   try {
     await mkdir(join(python, '..'), { recursive: true });
     await mkdir(model, { recursive: true });
@@ -29,7 +29,7 @@ test('status fails closed for an absent model or tokenizer', async () => {
   await fixture(async (root, local) => {
     const transcriber = createLocalTranscriber({ root });
     assert.equal((await transcriber.status()).transcriptionAvailable, true);
-    await rm(join(local, 'models/base/tokenizer.json'));
+    await rm(join(local, 'models/small/tokenizer.json'));
     assert.equal((await transcriber.status()).transcriptionAvailable, false);
     await assert.rejects(transcriber.transcribe({ buffer: Buffer.from('audio') }), /not set up/);
   });
@@ -38,7 +38,7 @@ test('status fails closed for an absent model or tokenizer', async () => {
 test('local worker receives only filesystem paths, returns Unicode, and removes its temporary audio', async () => {
   await fixture(async (root, local) => {
     const transcriber = createLocalTranscriber({ root, spawnImpl: (_python, args, options) => {
-      assert.ok(args.includes(join(local, 'models/base')));
+      assert.ok(args.includes(join(local, 'models/small')));
       assert.ok(args.includes('--audio'));
       assert.ok(!args.some((arg) => arg.includes('https:')));
       assert.equal(options.env.HF_HUB_OFFLINE, '1');
@@ -86,8 +86,11 @@ async function installMinusOne(local) {
   await writeFile(join(local, 'config.json'), JSON.stringify({ model: 'base', minusOne: 'htdemucs' }));
 }
 
-test('worker environment keeps Torch weights in the project-local cache', () => {
-  assert.equal(offlineEnvironment('/tmp/fixture').TORCH_HOME, join('/tmp/fixture', '.local-transcription', 'cache', 'torch'));
+test('transcription and Demucs model caches stay in the ignored local runtime folder', () => {
+  const local = join('/tmp/fixture', '.local-transcription');
+  const env = offlineEnvironment('/tmp/fixture');
+  assert.equal(env.HF_HOME, join(local, 'cache', 'huggingface'));
+  assert.equal(env.TORCH_HOME, join(local, 'cache', 'torch'));
 });
 
 test('minus-one status needs the setup marker and downloaded weights', async () => {

@@ -30,6 +30,39 @@ socket.socket.connect_ex = deny_network
 socket.getaddrinfo = deny_network
 
 REQUIRED_MODEL_FILES = ("model.bin", "config.json", "tokenizer.json")
+MAX_LINE_CHARS = 42
+MAX_LINE_SECONDS = 8.0
+MAX_WORD_GAP_SECONDS = 0.9
+
+
+def group_words(words):
+    """Group Whisper word timings into readable lyric lines without shifting timestamps."""
+    lines = []
+    group = []
+
+    def flush():
+        if group:
+            end = max(word["end"] for word in group)
+            text = "".join(word["text"] for word in group).strip()
+            if text and end > group[0]["start"]:
+                lines.append({"start": group[0]["start"], "end": end, "text": text})
+            group.clear()
+
+    for word in words:
+        if group:
+            group_end = max(item["end"] for item in group)
+            candidate = "".join(item["text"] for item in [*group, word]).strip()
+            should_split = (
+                len(candidate) > MAX_LINE_CHARS
+                or word["end"] - group[0]["start"] > MAX_LINE_SECONDS
+                or word["start"] - group_end > MAX_WORD_GAP_SECONDS
+            )
+            # Keep overlapping words together rather than inventing new timing.
+            if should_split and word["start"] >= group_end and group_end > group[0]["start"]:
+                flush()
+        group.append(word)
+    flush()
+    return lines
 
 
 def validate_model(directory):
@@ -81,14 +114,23 @@ def main():
     segments, info = model.transcribe(
         args.audio, language=args.language or None, task="transcribe",
         beam_size=5, vad_filter=False, condition_on_previous_text=False,
-        word_timestamps=False,
+        word_timestamps=True,
     )
     lyrics = []
     for segment in segments:
-        text = segment.text.strip()
-        start, end = max(0, segment.start), min(duration, segment.end)
-        if text and math.isfinite(start) and math.isfinite(end) and start < end:
-            lyrics.append({"start": start, "end": end, "text": text})
+        words = []
+        for word in segment.words or []:
+            text = word.word
+            start, end = max(0, word.start), min(duration, word.end)
+            if text.strip() and math.isfinite(start) and math.isfinite(end) and start < end:
+                words.append({"start": start, "end": end, "text": text})
+        if words:
+            lyrics.extend(group_words(words))
+        else:
+            text = segment.text.strip()
+            start, end = max(0, segment.start), min(duration, segment.end)
+            if text and math.isfinite(start) and math.isfinite(end) and start < end:
+                lyrics.append({"start": start, "end": end, "text": text})
     print(json.dumps({"lyrics": lyrics, "language": info.language, "local": True}, ensure_ascii=False))
 
 

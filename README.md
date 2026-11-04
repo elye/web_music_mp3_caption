@@ -10,7 +10,7 @@ Requires **Node.js 22+**, **pnpm**, and **Python 3.10–3.13** for transcription
 
 ```sh
 pnpm install
-pnpm setup:local       # One-time download: Whisper base model + Demucs vocal remover (~1.5 GB total)
+pnpm setup:local       # One-time download: Whisper small model + Demucs vocal remover (~1.8 GB total)
 pnpm dev
 ```
 
@@ -83,14 +83,14 @@ The queue-wide button processes tracks missing lyrics. If every track already ha
 **What runs where:**
 
 1. Your browser reads the local MP3, resamples it to mono PCM, and sends six-minute chunks over **loopback only**, to `127.0.0.1` on the same computer.
-2. The helper starts a local Python worker. `faster-whisper` reads the installed model from disk and transcribes on your CPU using int8 inference.
-3. Timed lines return to your browser and are saved in IndexedDB. No external service receives the audio, lyrics, or metadata.
+2. The helper starts a local Python worker. `faster-whisper` reads the installed model from disk and transcribes on your CPU using int8 inference, with word-level timestamps.
+3. The worker groups words into caption lines at pauses (0.9 seconds), with a 42-character or 8-second line limit. Timed lyrics return to your browser and are saved in IndexedDB. No external service receives the audio, lyrics, or metadata.
 
 **Offline guarantees and boundaries:**
 
 - Runtime model loading uses a **local directory only**, `local_files_only=True`, `HF_HUB_OFFLINE=1`, and `TRANSFORMERS_OFFLINE=1`. Telemetry is disabled. The worker also rejects Python socket connections and DNS lookups. Missing files produce a setup error, never a download or cloud fallback.
 - Only the explicitly invoked **setup script** accesses package/model registries. It downloads public packages and models, not your songs. No API key is needed.
-- Runtime/model files live under the git-ignored `.local-transcription/` folder. Python packages are isolated in its `venv/`; global Python is not modified.
+- The virtual environment, package caches, Whisper weights, Demucs weights, and temporary audio all live under the git-ignored `.local-transcription/` folder. Deleting that folder removes the downloaded models and local runtime; global Python is not modified.
 - For processing, private temporary WAV files are written under `.local-transcription/tmp/` with restrictive permissions on POSIX. They are removed after success, failure, or normal cancellation. Abrupt computer/process termination can leave temporary files there; delete stale contents when the app is stopped. This is ordinary local disk storage, not encrypted storage.
 - One worker runs at a time to avoid exhausting your computer. Cancellation terminates it and keeps the slot occupied until it actually exits. There is no paid usage limit. The default timeout is 20 minutes **per chunk**, not per whole song.
 - Automatic transcription supports songs up to **20 minutes** to limit browser memory use. Longer tracks still play with imported lyrics. Local processing can be slower than playback, particularly on older CPUs; prepare the queue before the gathering.
@@ -118,12 +118,12 @@ On Linux the default PyTorch wheel includes GPU libraries (about 2 GB). For a sm
 
 ```sh
 pnpm setup:local --model tiny    # ~75 MB; fastest, least accurate
-pnpm setup:local --model base    # ~145 MB; default, practical CPU starting point
-pnpm setup:local --model small   # ~490 MB; potentially better recognition, more CPU/RAM
-pnpm setup:local --model medium  # ~1.5 GB; substantially more CPU/RAM
+pnpm setup:local --model base    # ~145 MB; smaller and faster, but less accurate
+pnpm setup:local --model small   # ~490 MB; default, better recognition, more CPU/RAM
+pnpm setup:local --model medium  # ~1.5 GB; potentially better recognition, substantially more CPU/RAM
 ```
 
-All choices are multilingual. Setup verifies offline model loading, WAV decoding, and a short inference before selecting the model; failed setup does not replace a previously selected model. Model weights remain on disk for later offline use. Recognition quality on songs is not guaranteed even with larger models.
+All choices are multilingual. Fresh setup defaults to `small`. If an earlier setup selected another model, rerun `pnpm setup:local` to download and select `small`; setup verifies offline model loading, WAV decoding, and a short inference before switching, so a failed upgrade keeps the previous selection. Model weights remain on disk for later offline use. Recognition quality on songs is not guaranteed even with larger models.
 
 Optional `.env` settings are described in `.env.example`: CPU thread count (default 4), worker timeouts, a previously downloaded model, or an existing compatible Python executable. No credentials are used.
 
@@ -131,7 +131,7 @@ Optional `.env` settings are described in `.env.example`: CPU thread count (defa
 
 Use a connected computer with the **same OS, CPU architecture, and Python minor version** as the target:
 
-1. Run `pnpm install`, `pnpm setup:local --model base`, and `pnpm build`.
+1. Run `pnpm install`, `pnpm setup:local --model small`, and `pnpm build`.
 2. Prepare Python wheels (using the Python environment created above):
 
    ```sh
@@ -143,7 +143,7 @@ Use a connected computer with the **same OS, CPU architecture, and Python minor 
 4. On the disconnected computer:
 
    ```sh
-   pnpm setup:local --offline --wheels ./offline-wheels --model base
+   pnpm setup:local --offline --wheels ./offline-wheels --model small
    pnpm start
    ```
 

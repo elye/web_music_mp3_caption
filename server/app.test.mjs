@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { setTimeout as wait } from 'node:timers/promises';
 import { createApp } from './app.mjs';
 
-const ready = { transcriptionAvailable: true, engine: 'faster-whisper', model: 'base', local: true };
+const ready = { transcriptionAvailable: true, engine: 'faster-whisper', model: 'small', local: true };
 const worker = (transcribe = async () => ({ lyrics: [] }), separate = async () => ({ buffer: Buffer.from('ID3mp3'), duration: 1 })) => ({
   status: async () => ready,
   minusOneStatus: async () => ({ minusOneAvailable: true, minusOneModel: 'htdemucs' }),

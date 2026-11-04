@@ -26,7 +26,7 @@ export function createLocalTranscriber({ root = projectRoot, spawnImpl = spawn, 
 
   async function configuration() {
     const saved = await readFile(join(local, 'config.json'), 'utf8').then(JSON.parse).catch(() => ({}));
-    const model = process.env.LOCAL_WHISPER_MODEL || saved.model || 'base';
+    const model = process.env.LOCAL_WHISPER_MODEL || saved.model || 'small';
     if (!models.has(model)) throw new Error('Unsupported local model.');
     return {
       model,

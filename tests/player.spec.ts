@@ -469,7 +469,7 @@ test('failed transcription preserves existing lyrics', async ({ page }) => {
 
 test('detects a newly installed local model without reloading the app', async ({ page }) => {
   let ready = false;
-  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: ready, model: 'base', local: true } }));
+  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: ready, model: 'small', local: true } }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Or try a 32-second soundcheck' }).click();
   await page.locator('.queue-bottom').getByRole('button', { name: 'Generate lyrics' }).click();
@@ -477,7 +477,7 @@ test('detects a newly installed local model without reloading the app', async ({
   await expect(page.getByRole('button', { name: 'Transcribe song' })).toBeDisabled();
   ready = true;
   await page.getByRole('button', { name: 'Check again' }).click();
-  await expect(page.getByText('Whisper base · CPU · offline-ready')).toBeVisible();
+  await expect(page.getByText('Whisper small · CPU · offline-ready')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Transcribe song' })).toBeEnabled();
 });
 
@@ -501,7 +501,7 @@ test('real browser-to-local-model transcription works with external requests blo
     await page.locator('input[type=file]').first().setInputFiles({ name: 'Local voice.wav', mimeType: 'audio/wav', buffer: readFileSync(join(directory, 'voice.wav')) });
     await expect(page.locator('.track-row')).toHaveCount(1);
     await page.locator('.queue-bottom').getByRole('button', { name: 'Generate lyrics' }).click();
-    await expect(page.getByText('Whisper base · CPU · offline-ready')).toBeVisible();
+    await expect(page.getByText(/Whisper (base|small|tiny|medium) · CPU · offline-ready/)).toBeVisible();
     await page.getByRole('button', { name: 'Transcribe song' }).click();
     await expect(page.getByText('Finished. Review the words and timing before your session.')).toBeVisible({ timeout: 90000 });
     await page.getByRole('button', { name: 'Done', exact: true }).click();

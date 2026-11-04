@@ -5,7 +5,8 @@ dist/
 !.env.example
 .pnpm-store/
 .cache/
-.local-transcription/
+# Local Python environment, package caches, Whisper/Demucs models, and processing temp files.
+/.local-transcription/
 __pycache__/
 *.pyc
 *.tsbuildinfo
