@@ -557,6 +557,8 @@ test('tunes each song live, shows the shifted key, and remembers it', async ({ p
   await page.getByRole('button', { name: 'Raise by a semitone' }).click();
   await page.getByRole('button', { name: 'Raise by a semitone' }).click();
   await expect(readout).toContainText('+2 semitones');
+  // The voice-preserving shifter is the one doing the work, not the fallback.
+  await expect(page.locator('.tuner')).toHaveAttribute('data-shifter', 'natural');
   await expect(page.locator('.tuner-key')).not.toHaveText(originalKey);
   await expect.poll(pitchHz, { timeout: 10000 }).toBeGreaterThan(242);
   expect(await pitchHz()).toBeLessThan(252);
@@ -584,4 +586,16 @@ test('tunes each song live, shows the shifted key, and remembers it', async ({ p
   await page.locator('.track-row').first().click();
   await expect(readout).toContainText('−2 semitones');
   expect(errors).toEqual([]);
+});
+
+test('falls back to the basic shifter when the voice-preserving one cannot load', async ({ page }) => {
+  // Block the lazily loaded shifter module (dev and production file names differ).
+  await page.route(/\/signalsmith-stretch\.js|\/assets\/SignalsmithStretch-/, (route) => route.abort());
+  await page.goto('/');
+  await importSongs(page, 40);
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await page.getByRole('button', { name: 'Raise by a semitone' }).click();
+  await expect(page.locator('.tuner')).toHaveAttribute('data-shifter', 'basic', { timeout: 10000 });
+  await expect(page.locator('.tuner-readout')).toContainText('+1 semitone');
+  await expect(page.getByRole('button', { name: 'Raise by a semitone' })).toBeEnabled();
 });

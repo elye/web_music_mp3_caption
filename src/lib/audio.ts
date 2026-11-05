@@ -1,7 +1,6 @@
-import type { SoundTouchNode } from '@soundtouchjs/audio-worklet';
-import processorUrl from '@soundtouchjs/audio-worklet/processor?url';
 import type { Track } from '../types';
 import { clampPitch } from './pitch';
+import { createPitchShifter, type PitchShifter } from './shifters';
 
 export const softenedGain = (volume: number, softened: boolean) => Math.max(0, Math.min(1, volume)) * (softened ? 0.22 : 1);
 
@@ -16,7 +15,7 @@ export class AudioEngine {
   private versionGains?: { original: GainNode; backing: GainNode };
   /** Both versions meet here, then go either straight on (dry) or through the pitch shifter (wet). */
   private paths?: { bus: GainNode; dry: GainNode; wet: GainNode };
-  private shifter?: SoundTouchNode;
+  private shifter?: PitchShifter;
   private shifterLoading?: Promise<void>;
   private semitones = 0;
   /** False when this browser cannot run the pitch shifter. */
@@ -92,14 +91,11 @@ export class AudioEngine {
     const { context, paths } = this;
     this.shifterLoading ??= (async () => {
       try {
-        // Loaded on demand: the module needs AudioWorkletNode at import time, and most songs are never tuned.
-        const { SoundTouchNode } = await import('@soundtouchjs/audio-worklet');
-        await SoundTouchNode.register(context, processorUrl);
-        const node = new SoundTouchNode({ context });
-        node.pitchSemitones.value = this.semitones;
-        paths.bus.connect(node);
-        node.connect(paths.wet);
-        this.shifter = node;
+        const shifter = await createPitchShifter(context);
+        shifter.setSemitones(this.semitones);
+        paths.bus.connect(shifter.input);
+        shifter.output.connect(paths.wet);
+        this.shifter = shifter;
       } catch { this.pitchSupported = false; }
       this.applyPitch();
       this.onChange();
@@ -109,11 +105,14 @@ export class AudioEngine {
 
   private applyPitch() {
     if (!this.paths) return;
-    if (this.shifter) this.shifter.pitchSemitones.value = this.semitones;
+    this.shifter?.setSemitones(this.semitones);
     const shifted = Boolean(this.shifter) && this.semitones !== 0;
     this.ramp(shifted ? 0 : 1, 0.05, this.paths.dry);
     this.ramp(shifted ? 1 : 0, 0.05, this.paths.wet);
   }
+
+  /** Which shifter is in use once loaded: 'natural' keeps voices natural, 'basic' is the fallback. */
+  get pitchMode() { return this.shifter?.kind; }
 
   /** Shifts every version of the current song by whole semitones, live, without changing its speed. */
   setPitch(semitones: number) {
