@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activeLyricIndex, formatTime, lyricTransitionMs, lyricWindow, nextLyricIndex, normalizeLyrics, parseLrc, parseSrt, parseVtt, titleFromFilename, toLrc } from './lyrics';
+import { activeLyricIndex, formatTime, lyricTransitionMs, lyricWindow, nextLyricIndex, normalizeLyrics, parseLrc, parseSrt, parseVtt, splitWords, titleFromFilename, toLrc } from './lyrics';
 import { softenedGain } from './audio';
 import { encodeWav } from './transcription';
 
@@ -124,5 +124,18 @@ describe('player utilities', () => {
     expect(data.getUint16(22, true)).toBe(1);
     expect(data.getInt16(44, true)).toBe(-32768);
     expect(data.getInt16(48, true)).toBe(32767);
+  });
+});
+
+describe('splitWords', () => {
+  it('gives each Chinese character its own box so rows can animate', () => {
+    expect(splitWords('看見幸福的天地')).toEqual([...'看見幸福的天地']);
+  });
+  it('keeps punctuation attached to its neighbour', () => {
+    expect(splitWords('「你好」，世界。')).toEqual(['「你', '好」，', '世', '界。']);
+  });
+  it('keeps non-CJK words whole', () => {
+    expect(splitWords('hello')).toEqual(['hello']);
+    expect(splitWords('Hello你好')).toEqual(['Hello', '你', '好']);
   });
 });

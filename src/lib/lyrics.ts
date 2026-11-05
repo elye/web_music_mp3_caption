@@ -182,3 +182,32 @@ export function titleFromFilename(filename: string): { title: string; artist: st
     ? { artist: parts.shift()!.trim(), title: parts.join(' - ').trim() }
     : { title: name || 'Untitled song', artist: '' };
 }
+
+const CJK_CHARACTER = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+/** Punctuation that must stay on the same row as the character before it. */
+const NO_LINE_START = /^[\u3001\u3002\uff0c\uff0e\uff01\uff1f\uff1a\uff1b\uff09\u3011\u300d\u300f\u300b\u3009\u201d\u2019\u2026\u2014\u00b7,.!?:;)\]}]$/u;
+/** Punctuation that must stay on the same row as the character after it. */
+const NO_LINE_END = /^[\uff08\u3010\u300c\u300e\u300a\u3008\u201c\u2018([{]$/u;
+
+/**
+ * Chinese (and Japanese/Korean) has no spaces, so a whole sentence would be a single box that can't be
+ * animated row by row. Give every character its own box, keeping punctuation attached to its neighbour,
+ * and leave runs of other text (e.g. Latin words) whole.
+ */
+export function splitWords(part: string): string[] {
+  if (!CJK_CHARACTER.test(part)) return [part];
+  const units: string[] = [];
+  let openPrefix = '';
+  let lastIsCjk = false;
+  for (const char of part) {
+    if (NO_LINE_END.test(char)) { openPrefix += char; continue; }
+    if (units.length > 0 && openPrefix === '' && NO_LINE_START.test(char)) { units[units.length - 1] += char; continue; }
+    const cjk = CJK_CHARACTER.test(char);
+    if (units.length > 0 && openPrefix === '' && !cjk && !lastIsCjk) units[units.length - 1] += char;
+    else units.push(openPrefix + char);
+    openPrefix = '';
+    lastIsCjk = cjk;
+  }
+  if (openPrefix) units.push(openPrefix);
+  return units;
+}

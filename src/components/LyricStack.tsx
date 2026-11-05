@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
-import type { LyricWindow } from '../lib/lyrics';
+import { splitWords, type LyricWindow } from '../lib/lyrics';
 
 const EASING = 'cubic-bezier(0.4, 0, 0.2, 1)';
 const HAN_CHARACTER = /\p{Script=Han}/u;
@@ -138,7 +138,9 @@ function morphWords(node: HTMLElement, old: Snapshot, boxRect: DOMRect, layer: H
 
 /** Splits a lyric into word boxes (kept as inline-blocks so they wrap exactly like normal text). */
 function Words({ text }: { text: string }) {
-  return <>{text.split(/(\s+)/).map((part, i) => (part === '' || /^\s+$/.test(part) ? part : <span className={`lyric-word ${HAN_CHARACTER.test(part) ? 'chinese-word' : ''}`} key={i}>{part}</span>))}</>;
+  return <>{text.split(/(\s+)/).flatMap((part, i): ReactNode[] => (part === '' || /^\s+$/.test(part)
+    ? [part]
+    : splitWords(part).map((unit, j) => <span className={`lyric-word ${HAN_CHARACTER.test(unit) ? 'chinese-word' : ''}`} key={`${i}-${j}`}>{unit}</span>)))}</>;
 }
 
 interface Props {
