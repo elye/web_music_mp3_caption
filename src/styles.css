@@ -501,3 +501,20 @@ select { border: 1px solid #d9cfc0; background: #f9f6ef; color: #75634d; font-si
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Tuner */
+.player-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.player-options .version-toggle { margin-top: 0; }
+.tuner { display: inline-flex; align-items: stretch; border: 1px solid #ded7cd; border-radius: 6px; overflow: hidden; }
+.tuner button { background: transparent; border: 0; padding: 0 8px; color: #7e7362; display: inline-flex; align-items: center; }
+.tuner button:hover:not(:disabled) { background: #f0ebe2; }
+.tuner button:disabled { opacity: 0.35; }
+.tuner button + .tuner-readout, .tuner .tuner-readout + button { border-left: 1px solid #ded7cd; }
+.tuner .tuner-reset { border-left: 1px solid #ded7cd; color: #4f5c33; }
+.tuner-readout { display: flex; flex-direction: column; justify-content: center; min-width: 92px; padding: 3px 9px; line-height: 1.25; text-align: center; border-left: 1px solid #ded7cd; border-right: 1px solid #ded7cd; }
+.tuner-key { font-size: 10px; font-weight: 600; color: #4f5c33; white-space: nowrap; }
+.tuner-shift { font-size: 8px; color: #938a7c; white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.presenting .tuner, .presenting .tuner button + .tuner-readout, .presenting .tuner .tuner-readout + button, .presenting .tuner-readout, .presenting .tuner .tuner-reset { border-color: #615544; }
+.presenting .tuner button { color: #bfaa89; }
+.presenting .tuner button:hover:not(:disabled) { background: #ffffff0b; }
+.presenting .tuner-key { color: #b6c394; }

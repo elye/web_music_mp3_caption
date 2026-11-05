@@ -16,12 +16,14 @@
   "dependencies": {
     "@fontsource/dm-sans": "^5.2.5",
     "@fontsource/lora": "^5.2.6",
+    "@soundtouchjs/audio-worklet": "^2.1.1",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "multer": "^2.0.2",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "signalsmith-stretch": "^1.3.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",

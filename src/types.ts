@@ -4,6 +4,14 @@ export interface LyricLine {
   text: string;
 }
 
+/** A musical key estimated from the audio. `tonic` is a pitch class: 0 = C … 11 = B. */
+export interface TrackKey {
+  tonic: number;
+  mode: 'major' | 'minor';
+  /** Correlation with the best-matching key profile, 0–1. Low values mean the estimate is a guess. */
+  confidence: number;
+}
+
 export interface Track {
   id: string;
   title: string;
@@ -16,6 +24,10 @@ export interface Track {
   lyrics: LyricLine[];
   lyricSource?: 'imported' | 'manual' | 'transcribed';
   offset: number;
+  /** Live pitch shift for this song in semitones (negative = lower). Absent means 0. */
+  pitch?: number;
+  /** Key estimated from the original audio, filled in the first time the song is loaded. */
+  key?: TrackKey;
 }
 
 export interface Preferences {

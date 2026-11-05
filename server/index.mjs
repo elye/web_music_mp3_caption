@@ -11,7 +11,7 @@ const dist = fileURLToPath(new URL('../dist/', import.meta.url));
 if (existsSync(dist)) {
   // Production pages can load/connect only to this local origin, not remote services.
   app.use((_req, res, next) => {
-    res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
     res.setHeader('X-Content-Type-Options', 'nosniff');
     next();
   });

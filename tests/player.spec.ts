@@ -513,3 +513,89 @@ test('real browser-to-local-model transcription works with external requests blo
     await page.screenshot({ path: 'test-results/screenshots/local-transcription.png', fullPage: true });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('tunes each song live, shows the shifted key, and remembers it', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  // Listen to what actually reaches the speakers, to measure the pitch rather than trust a setting.
+  await page.addInitScript(() => {
+    const connect = AudioNode.prototype.connect as (...args: unknown[]) => unknown;
+    AudioNode.prototype.connect = function (this: AudioNode, ...args: unknown[]) {
+      const target = args[0];
+      if (target instanceof AudioDestinationNode) {
+        const analyser = this.context.createAnalyser();
+        analyser.fftSize = 32768;
+        connect.call(this, analyser);
+        (window as unknown as { testAnalyser: AnalyserNode }).testAnalyser = analyser;
+      }
+      return connect.apply(this, args);
+    } as typeof AudioNode.prototype.connect;
+  });
+  await page.goto('/');
+  await importSongs(page, 40);
+  const readout = page.locator('.tuner-readout');
+  const pitchHz = () => page.evaluate(() => {
+    const analyser = (window as unknown as { testAnalyser?: AnalyserNode }).testAnalyser;
+    if (!analyser) return 0;
+    const bins = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(bins);
+    let peak = 0;
+    for (let i = 1; i < bins.length; i++) if (bins[i] > bins[peak]) peak = i;
+    return peak * analyser.context.sampleRate / analyser.fftSize;
+  });
+
+  // The key is worked out in the background, and an untuned song reads as the original.
+  await expect(page.locator('.tuner-key')).not.toHaveText('Key —');
+  await expect(readout).toContainText('Original');
+  const originalKey = await page.locator('.tuner-key').innerText();
+
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect.poll(pitchHz).toBeGreaterThan(212);
+  expect(await pitchHz()).toBeLessThan(228);
+
+  // Two semitones up: the test tone (220 Hz) becomes 246.9 Hz while the song keeps its speed.
+  await page.getByRole('button', { name: 'Raise by a semitone' }).click();
+  await page.getByRole('button', { name: 'Raise by a semitone' }).click();
+  await expect(readout).toContainText('+2 semitones');
+  // The voice-preserving shifter is the one doing the work, not the fallback.
+  await expect(page.locator('.tuner')).toHaveAttribute('data-shifter', 'natural');
+  await expect(page.locator('.tuner-key')).not.toHaveText(originalKey);
+  await expect.poll(pitchHz, { timeout: 10000 }).toBeGreaterThan(242);
+  expect(await pitchHz()).toBeLessThan(252);
+  const playbackRate = await page.evaluate(() => (window as unknown as { testAudio?: HTMLMediaElement }).testAudio?.playbackRate ?? document.querySelector('audio')?.playbackRate ?? 1);
+  expect(playbackRate).toBe(1);
+
+  // Resetting goes back to the untouched original.
+  await page.getByRole('button', { name: 'Reset to original key' }).click();
+  await expect(readout).toContainText('Original');
+  await expect.poll(pitchHz, { timeout: 10000 }).toBeLessThan(228);
+  expect(await pitchHz()).toBeGreaterThan(212);
+
+  // Tuning belongs to one song: down a tone here, and the next song is unaffected.
+  await page.getByRole('button', { name: 'Lower by a semitone' }).click();
+  await page.getByRole('button', { name: 'Lower by a semitone' }).click();
+  await expect(readout).toContainText('−2 semitones');
+  await page.getByRole('button', { name: 'Next song' }).click();
+  await expect(readout).toContainText('Original');
+  await page.getByRole('button', { name: 'Raise by a semitone' }).click();
+  await expect(readout).toContainText('+1 semitone');
+
+  // And it is remembered after a reload.
+  await page.reload();
+  await expect(page.locator('.track-row')).toHaveCount(2);
+  await page.locator('.track-row').first().click();
+  await expect(readout).toContainText('−2 semitones');
+  expect(errors).toEqual([]);
+});
+
+test('falls back to the basic shifter when the voice-preserving one cannot load', async ({ page }) => {
+  // Block the lazily loaded shifter module (dev and production file names differ).
+  await page.route(/\/signalsmith-stretch\.js|\/assets\/SignalsmithStretch-/, (route) => route.abort());
+  await page.goto('/');
+  await importSongs(page, 40);
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await page.getByRole('button', { name: 'Raise by a semitone' }).click();
+  await expect(page.locator('.tuner')).toHaveAttribute('data-shifter', 'basic', { timeout: 10000 });
+  await expect(page.locator('.tuner-readout')).toContainText('+1 semitone');
+  await expect(page.getByRole('button', { name: 'Raise by a semitone' })).toBeEnabled();
+});
