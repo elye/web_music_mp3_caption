@@ -16,6 +16,7 @@
   "dependencies": {
     "@fontsource/dm-sans": "^5.2.5",
     "@fontsource/lora": "^5.2.6",
+    "@soundtouchjs/audio-worklet": "^2.1.1",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",

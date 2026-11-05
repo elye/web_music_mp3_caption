@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, CloudOff, Disc3, Download, FileText, Headphones, ListMusic,
-  LoaderCircle, Maximize, Minimize, Music2, Pause, Play, Plus, Repeat2, RotateCcw,
+  LoaderCircle, Maximize, Minimize, Minus, Music2, Pause, Play, Plus, Repeat2, RotateCcw,
   Settings2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Upload, Volume1, Volume2, VolumeX, Waves, X,
 } from 'lucide-react';
 import type { LyricLine, Preferences, Track } from './types';
@@ -9,6 +9,8 @@ import { formatTime, lyricTransitionMs, lyricWindow, nextLyricIndex, titleFromFi
 import { readDuration } from './lib/audio';
 import { loadTracks, readPreferences, removeStoredTrack, storeOrder, storePreferences, storeTrack } from './lib/storage';
 import { createDemoTrack } from './lib/demo';
+import { analyzeKey } from './lib/keyAnalysis';
+import { CONFIDENT_KEY, MAX_PITCH, MIN_PITCH, clampPitch, formatKey, formatPitch, transposeKey } from './lib/pitch';
 import { usePlayer } from './hooks/usePlayer';
 import { LyricsEditor } from './components/LyricsEditor';
 import { LyricStack } from './components/LyricStack';
@@ -44,8 +46,12 @@ function App() {
   const transitionTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const importLock = useRef(false);
   const orderLock = useRef(false);
+  const tracksRef = useRef<Track[]>([]);
+  const keyAttempts = useRef(new Set<string>());
   const { engine, time, duration, playing, fading } = usePlayer();
+  tracksRef.current = tracks;
   const active = tracks.find((track) => track.id === activeId);
+  const activePitch = clampPitch(active?.pitch);
   const activeIndex = tracks.findIndex((track) => track.id === activeId);
   const actualDuration = duration || active?.duration || 0;
   const totalDuration = tracks.reduce((total, track) => total + track.duration, 0);
@@ -59,6 +65,12 @@ function App() {
   const hasLyrics = Boolean(active?.lyrics.some((line) => line.text));
   // The version actually audible: the minus-one only exists for songs it has been generated for.
   const usingMinusOne = Boolean(active?.minusOne && preferences.minusOne);
+  const pitchReady = Boolean(active) && engine.pitchSupported;
+  const shiftedKey = active?.key ? transposeKey(active.key, activePitch) : undefined;
+  const guessedKey = Boolean(active?.key && active.key.confidence < CONFIDENT_KEY);
+  const tunerTitle = !engine.pitchSupported ? 'This browser cannot change pitch live.' : active?.key
+    ? `Detected ${formatKey(active.key)}${active.key.confidence < CONFIDENT_KEY ? ' (a guess)' : ''}. Tuning applies to this song only.`
+    : 'Working out the key… tuning still works.';
   const repeatSong = preferences.repeat && preferences.repeatMode === 'song';
   const repeatQueue = preferences.repeat && preferences.repeatMode === 'queue';
   const isPresenting = fullscreen || stageOnly;
@@ -112,6 +124,21 @@ function App() {
     try { storePreferences(preferences); } catch { /* Audio remains usable when browser storage is blocked. */ }
   }, [engine, preferences]);
   useEffect(() => { engine.setSoftened(softened); }, [engine, softened]);
+  // Each song keeps its own tuning; it is applied live, to the original and the minus-one alike.
+  useEffect(() => { engine.setPitch(activePitch); }, [engine, activePitch, activeId]);
+  // Estimate the key once per song, in the background, and remember it with the song.
+  const activeKeyMissing = Boolean(active && !active.key);
+  useEffect(() => {
+    if (!activeId || !activeKeyMissing || keyAttempts.current.has(activeId)) return;
+    const id = activeId;
+    const file = tracksRef.current.find((track) => track.id === id)?.file;
+    if (!file) return;
+    keyAttempts.current.add(id);
+    void analyzeKey(file).then((key) => {
+      const track = tracksRef.current.find((item) => item.id === id);
+      if (key && track && !track.key) updateTrack({ ...track, key });
+    });
+  }, [activeId, activeKeyMissing]);
   // A minus-one generated or uploaded for the song that is already loaded joins playback in step.
   const activeMinusOne = active?.minusOne;
   useEffect(() => { engine.syncMinusOne(activeMinusOne); }, [engine, activeMinusOne]);
@@ -235,6 +262,12 @@ function App() {
   function updateTrack(updated: Track) {
     setTracks((current) => current.map((track) => track.id === updated.id ? updated : track));
     void storeTrack(updated).catch(storageError);
+  }
+
+  function setPitch(semitones: number) {
+    if (!active) return;
+    const pitch = clampPitch(semitones);
+    if (pitch !== activePitch) updateTrack({ ...active, pitch: pitch || undefined });
   }
 
   function saveMinusOne(id: string, minusOne: Blob) {
@@ -383,7 +416,15 @@ function App() {
     </main>
 
     <footer className="player" aria-label="Playback controls">
-      <div className="player-song"><span className={`album-art ${playing ? 'album-playing' : ''}`}><AudioLines size={25} /></span><div><strong>{active?.title ?? 'Your next sing-along starts here'}</strong><small>{gap ? `Next song in ${gap.remaining}s` : fading ? 'Fading gently… your song stays in the queue' : softened ? 'Music softened · your place is kept' : active?.artist || (active ? 'Ready when you are' : 'Add a few songs to get things going')}</small>{active && <div className="version-toggle" role="group" aria-label="Playback version"><button aria-pressed={!usingMinusOne} onClick={() => chooseVersion(false)}>Original</button><button aria-pressed={usingMinusOne} title={active.minusOne ? 'Vocals removed · V' : 'Make a minus-one for this song'} onClick={() => chooseVersion(true)}>Minus-one</button></div>}</div></div>
+      <div className="player-song"><span className={`album-art ${playing ? 'album-playing' : ''}`}><AudioLines size={25} /></span><div><strong>{active?.title ?? 'Your next sing-along starts here'}</strong><small>{gap ? `Next song in ${gap.remaining}s` : fading ? 'Fading gently… your song stays in the queue' : softened ? 'Music softened · your place is kept' : active?.artist || (active ? 'Ready when you are' : 'Add a few songs to get things going')}</small>{active && <div className="player-options"><div className="version-toggle" role="group" aria-label="Playback version"><button aria-pressed={!usingMinusOne} onClick={() => chooseVersion(false)}>Original</button><button aria-pressed={usingMinusOne} title={active.minusOne ? 'Vocals removed · V' : 'Make a minus-one for this song'} onClick={() => chooseVersion(true)}>Minus-one</button></div><div className="tuner" role="group" aria-label="Tune this song">
+          <button aria-label="Lower by a semitone" title="Lower by a semitone" disabled={!pitchReady || activePitch <= MIN_PITCH} onClick={() => setPitch(activePitch - 1)}><Minus size={12} /></button>
+          <span className="tuner-readout" role="status" aria-live="polite" title={tunerTitle}>
+            <span className="tuner-key">{shiftedKey ? `${formatKey(shiftedKey)}${guessedKey ? '?' : ''}` : 'Key —'}</span>
+            <span className="tuner-shift">{activePitch === 0 ? 'Original' : `${formatPitch(activePitch)} semitone${Math.abs(activePitch) === 1 ? '' : 's'}${active.key ? ` · from ${formatKey(active.key)}` : ''}`}</span>
+          </span>
+          <button aria-label="Raise by a semitone" title="Raise by a semitone" disabled={!pitchReady || activePitch >= MAX_PITCH} onClick={() => setPitch(activePitch + 1)}><Plus size={12} /></button>
+          {activePitch !== 0 && <button className="tuner-reset" aria-label="Reset to original key" title="Reset to original key" onClick={() => setPitch(0)}><RotateCcw size={11} /></button>}
+        </div></div>}</div></div>
       <div className="transport"><div className="transport-buttons"><span className="repeat-group"><span className={`repeat-scope ${preferences.repeat ? 'visible' : ''}`} role="group" aria-label="Repeat scope"><button aria-pressed={!repeatSong} title="Repeat the whole queue" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'queue' }))}>Queue</button><button aria-pressed={repeatSong} title="Repeat this song" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'song' }))}>Song</button></span><button className={`icon-button repeat-button ${preferences.repeat ? 'enabled' : ''}`} aria-label="Repeat" aria-pressed={preferences.repeat} title={!preferences.repeat ? 'Repeat is off' : repeatSong ? 'Repeating this song' : 'Repeating the whole queue'} onClick={() => setPreferences((value) => ({ ...value, repeat: !value.repeat }))}><span className="repeat-icon"><Repeat2 size={18} /></span></button></span><button className="icon-button" aria-label="Previous song or restart" disabled={!active} onClick={previousTrack}><SkipBack size={21} fill="currentColor" /></button><button className={`play-button ${fading ? 'fading' : ''}`} aria-label={gap ? 'Pause auto-advance' : playing && !fading ? 'Pause with fade' : 'Play'} disabled={!active} onClick={togglePlayback}>{gap || (playing && !fading) ? <Pause size={23} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</button><button className="icon-button" aria-label="Next song" disabled={!active || (activeIndex === tracks.length - 1 && !repeatQueue)} onClick={nextTrack}><SkipForward size={21} fill="currentColor" /></button><span className="transport-spacer" /></div><div className="seek-row"><span>{formatTime(time)}</span><input type="range" aria-label="Song position" aria-valuetext={`${formatTime(time)} of ${formatTime(actualDuration)}`} min={0} max={actualDuration || 1} step={0.1} value={Math.min(time, actualDuration || 1)} disabled={!active || !duration} style={{ '--progress': `${actualDuration ? time / actualDuration * 100 : 0}%` } as CSSProperties} onChange={(event) => { cancelGap(); setFinished(false); engine.seek(Number(event.target.value)); }} /><span>{formatTime(actualDuration)}</span></div></div>
       <div className="volume-controls"><button className={`soften-button ${softened ? 'softened' : ''}`} disabled={!active} aria-pressed={softened} title="Gently lower music to 22% · M" onClick={() => setSoftened((value) => !value)}><Waves size={17} /><span>{softened ? 'Restore' : 'Soften'}</span></button><div className="volume-slider">{preferences.volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}<input type="range" min={0} max={1} step={0.01} value={preferences.volume} aria-label="Volume" aria-valuetext={`${Math.round(preferences.volume * 100)} percent`} style={{ '--progress': `${preferences.volume * 100}%` } as CSSProperties} onChange={(event) => setPreferences((value) => ({ ...value, volume: Number(event.target.value) }))} /></div></div>
     </footer>
