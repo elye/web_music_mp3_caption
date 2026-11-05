@@ -70,10 +70,13 @@ h1 > span { font-size: 11px; font-weight: 500; letter-spacing: 0; border: 1px so
 .queue-meta { display: flex; align-items: center; justify-content: space-between; margin: 24px 0 13px; font-size: 9px; color: #8b8479; gap: 5px; }
 .autoplay-badge { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .track-list { padding: 0; margin: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #d4cbbd transparent; }
-.track-row { border: 1px solid transparent; border-radius: 7px; position: relative; background: transparent; }
+.track-row { border: 1px solid transparent; border-radius: 7px; position: relative; background: transparent; cursor: grab; }
 .track-row:hover { background: #efebe3; }
 .track-row.selected { border-color: #e7c6b3; background: #f3e9dd; }
-.track-select { display: flex; align-items: center; gap: 10px; width: 100%; padding: 13px 10px; background: none; border: 0; text-align: left; }
+.track-row.dragging { opacity: 0.35; transform: scale(.985); }
+.track-row.drop-before, .track-row.drop-after { border-color: #d9aa90; outline: 1px dashed var(--orange); outline-offset: -3px; background: #f7eee6; box-shadow: inset 0 0 0 1px #ffffff88; }
+.track-row.drag-preview { opacity: .78; border-color: #e7c6b3; background: #f3e9dd; box-shadow: 0 8px 24px #35251633; }
+.track-select { display: flex; align-items: center; gap: 10px; width: 100%; padding: 13px 10px; background: none; border: 0; text-align: left; cursor: grab; }
 .track-number { color: #9e9588; width: 24px; flex-shrink: 0; text-align: center; font-size: 10px; font-variant-numeric: tabular-nums; }
 .selected .track-number { color: var(--orange); }
 .track-details { flex: 1; min-width: 0; }
@@ -85,8 +88,11 @@ h1 > span { font-size: 11px; font-weight: 500; letter-spacing: 0; border: 1px so
 .track-duration { margin-left: auto; font-variant-numeric: tabular-nums; padding-left: 7px; }
 .track-actions { position: absolute; right: 3px; top: 4px; display: flex; background: #efebe3; border-radius: 5px; opacity: 0; pointer-events: none; box-shadow: -7px 0 9px #efebe3; }
 .selected .track-actions { background: #f3e9dd; box-shadow: -7px 0 9px #f3e9dd; }
-.track-row:hover .track-actions, .track-row:focus-within .track-actions { opacity: 1; pointer-events: auto; }
+.track-row:hover .track-actions, .track-row:focus-within .track-actions, .track-row.drag-preview .track-actions { opacity: 1; pointer-events: none; }
+.track-row.drag-preview .track-actions { background: #f3e9dd; box-shadow: -7px 0 9px #f3e9dd; }
 .tiny-button { background: transparent; border: 0; color: #887b6d; padding: 4px; display: flex; border-radius: 3px; }
+.drag-handle { cursor: grab; touch-action: none; }
+.drag-handle:active { cursor: grabbing; }
 .tiny-button:hover:not(:disabled) { background: #dfd5c7; color: #4f473d; }
 .tiny-button.remove:hover:not(:disabled) { color: #a13f30; }
 .empty-queue { color: #c4bbaa; padding: 45px 0; text-align: center; }

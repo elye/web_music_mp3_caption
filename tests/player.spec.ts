@@ -81,7 +81,7 @@ test('welcoming empty state, responsive layout, and no unintended uploads', asyn
   expect(externalRequests).toEqual([]);
 });
 
-test('imports a queue, edits lyrics, adjusts captions, reorders, and restores locally', async ({ page }) => {
+test('imports a queue, edits lyrics, adjusts captions, drags songs to reorder, and restores locally', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
   await importSongs(page);
@@ -92,7 +92,7 @@ test('imports a queue, edits lyrics, adjusts captions, reorders, and restores lo
   const initialSize = await page.locator('.current-lyric').evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
   await page.getByRole('button', { name: 'Larger lyrics' }).click();
   expect(await page.locator('.current-lyric').evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThan(initialSize);
-  await page.getByRole('button', { name: 'Move Second song up' }).click({ force: true });
+  await page.locator('.track-row').nth(1).dragTo(page.locator('.track-row').first(), { targetPosition: { x: 20, y: 2 } });
   await expect(page.locator('.track-row').first()).toContainText('Second song');
   await page.reload();
   await expect(page.locator('.track-row')).toHaveCount(2);

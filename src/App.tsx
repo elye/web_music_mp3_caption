@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 import {
-  ArrowDown, ArrowUp, AudioLines, Check, ChevronDown, CloudOff, Disc3, Download, FileText, Headphones, ListMusic,
+  AudioLines, Check, ChevronDown, CloudOff, Disc3, Download, FileText, GripVertical, Headphones, ListMusic,
   LoaderCircle, Maximize, Minimize, Minus, Music2, Pause, Play, Plus, Repeat2, RotateCcw,
   Settings2, ShieldCheck, SkipBack, SkipForward, Sparkles, Trash2, Upload, Volume1, Volume2, VolumeX, Waves, X,
 } from 'lucide-react';
@@ -37,12 +37,15 @@ function App() {
   const [removeId, setRemoveId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; kind?: 'error' | 'success' } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; position: 'before' | 'after' } | null>(null);
   const [adding, setAdding] = useState(false);
   const [gap, setGap] = useState<{ nextId: string; remaining: number } | null>(null);
   const [finished, setFinished] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const appRef = useRef<HTMLDivElement>(null);
   const dragDepth = useRef(0);
+  const draggedTrackRef = useRef<string | null>(null);
   const transitionTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const importLock = useRef(false);
   const orderLock = useRef(false);
@@ -314,18 +317,45 @@ function App() {
     } finally { importLock.current = false; setAdding(false); }
   }
 
-  async function moveTrack(index: number, direction: number) {
-    const destination = index + direction;
-    if (orderLock.current || destination < 0 || destination >= tracks.length) return;
+  async function moveTrack(trackId: string, destination: number) {
+    const source = tracks.findIndex((track) => track.id === trackId);
+    if (orderLock.current || source < 0 || destination < 0 || destination >= tracks.length || source === destination) return;
     orderLock.current = true;
     const updated = [...tracks];
-    [updated[index], updated[destination]] = [updated[destination], updated[index]];
+    const [moved] = updated.splice(source, 1);
+    updated.splice(destination, 0, moved);
     const positions = new Map(updated.map((track, position) => [track.id, position]));
     try {
       // Commit before displaying the new order, so an immediate reload cannot undo it.
       await storeOrder(updated.map((track) => track.id)).catch(storageError);
       setTracks((current) => [...current].sort((a, b) => (positions.get(a.id) ?? Infinity) - (positions.get(b.id) ?? Infinity)));
     } finally { orderLock.current = false; }
+  }
+
+  function startTrackDrag(trackId: string, event: DragEvent<HTMLLIElement>) {
+    draggedTrackRef.current = trackId;
+    setDraggedTrackId(trackId);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', trackId);
+
+    const row = event.currentTarget;
+    const bounds = row.getBoundingClientRect();
+    const preview = row.cloneNode(true) as HTMLLIElement;
+    preview.classList.add('drag-preview');
+    preview.setAttribute('aria-hidden', 'true');
+    Object.assign(preview.style, {
+      position: 'fixed', left: '-10000px', top: '-10000px', width: `${bounds.width}px`,
+      opacity: '0.72', pointerEvents: 'none', listStyle: 'none', margin: '0',
+    });
+    document.body.append(preview);
+    event.dataTransfer.setDragImage(preview, event.clientX - bounds.left, event.clientY - bounds.top);
+    requestAnimationFrame(() => preview.remove());
+  }
+
+  function finishTrackDrag() {
+    draggedTrackRef.current = null;
+    setDraggedTrackId(null);
+    setDropTarget(null);
   }
 
   function confirmRemove() {
@@ -375,13 +405,34 @@ function App() {
           <span className="file-format">MP3, WAV, M4A & more</span>
         </button>
         <div className="queue-meta"><span>{tracks.length ? `${tracks.length} song${tracks.length === 1 ? '' : 's'} · ${formatTime(totalDuration)}` : 'A good evening starts with a song'}</span>{tracks.length > 0 && <span className="autoplay-badge"><Repeat2 size={12} /> Auto-next</span>}</div>
-        <ol className="track-list">
-          {tracks.map((track, index) => <li key={track.id} className={`track-row ${track.id === activeId ? 'selected' : ''}`}>
+        <ol className="track-list" aria-label="Song arrangement">
+          {tracks.map((track, index) => <li key={track.id} draggable title="Drag anywhere on this song to reorder" onDragStart={(event) => startTrackDrag(track.id, event)} onDragEnd={finishTrackDrag} className={`track-row ${track.id === activeId ? 'selected' : ''} ${draggedTrackId === track.id ? 'dragging' : ''} ${dropTarget?.id === track.id ? `drop-${dropTarget.position}` : ''}`} onDragOver={(event) => {
+            if (!draggedTrackRef.current || draggedTrackRef.current === track.id) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            const position = event.clientY < event.currentTarget.getBoundingClientRect().top + event.currentTarget.getBoundingClientRect().height / 2 ? 'before' : 'after';
+            setDropTarget((current) => current?.id === track.id && current.position === position ? current : { id: track.id, position });
+          }} onDrop={(event) => {
+            const sourceId = draggedTrackRef.current;
+            if (!sourceId || sourceId === track.id) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const sourceIndex = tracks.findIndex((item) => item.id === sourceId);
+            const targetIndex = tracks.findIndex((item) => item.id === track.id);
+            const position = dropTarget?.id === track.id ? dropTarget.position : 'before';
+            const insertionIndex = targetIndex + (position === 'after' ? 1 : 0);
+            void moveTrack(sourceId, insertionIndex - (sourceIndex < insertionIndex ? 1 : 0));
+            finishTrackDrag();
+          }}>
             <button className="track-select" onClick={() => { if (track.id !== activeId) afterFadeOut(() => selectTrack(track, playing || Boolean(gap))); }} aria-label={`Select ${track.title}`} aria-current={track.id === activeId ? 'true' : undefined}>
               <span className={`track-number ${track.id === activeId && playing ? 'is-playing' : ''}`}>{track.id === activeId && playing ? <span className="equalizer"><i /><i /><i /></span> : String(index + 1).padStart(2, '0')}</span>
               <span className="track-details"><strong>{track.title}</strong><small>{track.lyrics.some((line) => line.text) ? <><span className="lyrics-dot" /> Lyrics ready</> : <><span className="lyrics-dot pending" /> Needs lyrics</>}{track.minusOne && <span className="minus-one-badge" title="Minus-one ready">Minus-one</span>}<span className="track-duration">{formatTime(track.duration)}</span></small></span>
             </button>
-            <div className="track-actions"><button className="tiny-button" disabled={index === 0} aria-label={`Move ${track.title} up`} onClick={() => moveTrack(index, -1)}><ArrowUp size={13} /></button><button className="tiny-button" disabled={index === tracks.length - 1} aria-label={`Move ${track.title} down`} onClick={() => moveTrack(index, 1)}><ArrowDown size={13} /></button><button className="tiny-button remove" disabled={track.id === activeId && playing} title={track.id === activeId && playing ? 'Pause before removing the current song' : 'Remove from queue'} aria-label={`Remove ${track.title}`} onClick={() => setRemoveId(track.id)}><X size={14} /></button></div>
+            <div className="track-actions"><button className="tiny-button drag-handle" aria-label={`Reorder ${track.title} with keyboard`} title="Drag anywhere on the tile · use ↑ or ↓ with keyboard" onKeyDown={(event) => {
+              if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+              event.preventDefault();
+              void moveTrack(track.id, index + (event.key === 'ArrowUp' ? -1 : 1));
+            }}><GripVertical size={14} /></button><button className="tiny-button remove" disabled={track.id === activeId && playing} title={track.id === activeId && playing ? 'Pause before removing the current song' : 'Remove from queue'} aria-label={`Remove ${track.title}`} onClick={() => setRemoveId(track.id)}><X size={14} /></button></div>
           </li>)}
         </ol>
         {!tracks.length && <div className="empty-queue"><ListMusic size={25} strokeWidth={1.3} /><p>One song or a whole evening.<br /> We’ll keep the music moving.</p></div>}
