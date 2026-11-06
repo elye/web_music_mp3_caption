@@ -20,6 +20,8 @@ export interface Track {
   file: Blob;
   /** Backing track with the vocals removed, generated locally. */
   minusOne?: Blob;
+  /** Whether this song participates in automatic queue playback; absent means included. */
+  inQueue?: boolean;
   filename: string;
   lyrics: LyricLine[];
   lyricSource?: 'imported' | 'manual' | 'transcribed';

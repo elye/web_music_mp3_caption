@@ -181,6 +181,61 @@ test('auto-advance countdown can be paused and the queue ends cleanly', async ({
   await expect(page.locator('.track-row')).toHaveCount(2);
 });
 
+test('queue checkboxes persist, select all, and skip excluded songs', async ({ page }) => {
+  await instrumentAudio(page);
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
+  await importSongs(page);
+  await page.locator('input[type=file]').first().setInputFiles([
+    { name: 'The Group - Third song.wav', mimeType: 'audio/wav', buffer: wav() },
+  ]);
+  await expect(page.locator('.track-row')).toHaveCount(3);
+  const numberBox = await page.locator('.track-number').first().boundingBox();
+  const checkboxBox = await page.locator('.track-queue-toggle input').first().boundingBox();
+  expect(numberBox && checkboxBox && checkboxBox.y > numberBox.y).toBe(true);
+  expect(numberBox && checkboxBox && Math.abs((checkboxBox.x + checkboxBox.width / 2) - (numberBox.x + numberBox.width / 2)) < 3).toBe(true);
+
+  const selectAll = page.getByRole('checkbox', { name: 'Select all for queue' });
+  const second = page.getByRole('checkbox', { name: 'Include Second song in playback queue' });
+  await second.uncheck();
+  expect(await selectAll.evaluate((input) => (input as HTMLInputElement).indeterminate)).toBe(true);
+  await selectAll.check();
+  await expect(page.locator('.track-queue-toggle input')).toHaveCount(3);
+  for (const checkbox of await page.locator('.track-queue-toggle input').all()) await expect(checkbox).toBeChecked();
+  await selectAll.uncheck();
+  for (const checkbox of await page.locator('.track-queue-toggle input').all()) await expect(checkbox).not.toBeChecked();
+  await selectAll.check();
+  await second.uncheck();
+  const secondStoredInQueue = () => page.evaluate(() => new Promise<boolean>((resolve, reject) => {
+    const open = indexedDB.open('chorus-library', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const request = db.transaction('tracks', 'readonly').objectStore('tracks').getAll();
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const track = request.result.find((item: { title: string }) => item.title === 'Second song');
+        db.close();
+        resolve(track?.inQueue !== false);
+      };
+    };
+  }));
+  await expect.poll(secondStoredInQueue).toBe(false);
+  await page.reload();
+
+  await expect(page.locator('.track-row')).toHaveCount(3);
+  await expect(page.getByRole('checkbox', { name: 'Include First song in playback queue' })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Include Second song in playback queue' })).not.toBeChecked();
+  await page.getByRole('button', { name: 'Next song' }).click();
+  await expect(page.locator('.track-row.selected')).toContainText('Third song');
+  await page.getByRole('button', { name: 'Select First song' }).click();
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await page.evaluate(() => (window as unknown as { testAudio: HTMLMediaElement }).testAudio.dispatchEvent(new Event('ended')));
+  await expect(page.locator('.gap-content h3')).toHaveText('Third song');
+  await page.getByRole('checkbox', { name: 'Include Third song in playback queue' }).uncheck();
+  await expect(page.getByText('You’ve reached the end of your queue.')).toBeVisible();
+});
+
 test('only starts local transcription on request and stores returned captions', async ({ page }) => {
   let transcriptions = 0;
   await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: true } }));

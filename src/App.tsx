@@ -21,6 +21,12 @@ import { TranscriptionDialog } from './components/TranscriptionDialog';
 import { MinusOneDialog } from './components/MinusOneDialog';
 import { DownloadDialog } from './components/DownloadDialog';
 
+const isInQueue = (track: Track) => track.inQueue !== false;
+
+function nextQueuedTrack(tracks: Track[], currentIndex: number, repeat: boolean) {
+  return tracks.slice(currentIndex + 1).find(isInQueue) ?? (repeat ? tracks.find(isInQueue) : undefined);
+}
+
 function App() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [ready, setReady] = useState(false);
@@ -56,8 +62,14 @@ function App() {
   const active = tracks.find((track) => track.id === activeId);
   const activePitch = clampPitch(active?.pitch);
   const activeIndex = tracks.findIndex((track) => track.id === activeId);
+  const repeatSong = preferences.repeat && preferences.repeatMode === 'song';
+  const repeatQueue = preferences.repeat && preferences.repeatMode === 'queue';
   const actualDuration = duration || active?.duration || 0;
-  const totalDuration = tracks.reduce((total, track) => total + track.duration, 0);
+  const queuedTracks = tracks.filter(isInQueue);
+  const allQueued = tracks.length > 0 && queuedTracks.length === tracks.length;
+  const partiallyQueued = queuedTracks.length > 0 && !allQueued;
+  const totalDuration = queuedTracks.reduce((total, track) => total + track.duration, 0);
+  const hasNextQueued = tracks.slice(activeIndex + 1).some(isInQueue) || (repeatQueue && queuedTracks.length > 0);
   const readyLyrics = tracks.filter((track) => track.lyrics.some((line) => line.text)).length;
   const nextIndex = active ? nextLyricIndex(active.lyrics, time, active.offset) : -1;
   const nextLine = active?.lyrics[nextIndex];
@@ -74,8 +86,6 @@ function App() {
   const tunerTitle = !engine.pitchSupported ? 'This browser cannot change pitch live.' : active?.key
     ? `Detected ${formatKey(active.key)}${active.key.confidence < CONFIDENT_KEY ? ' (a guess)' : ''}. Tuning applies to this song only.`
     : 'Working out the key… tuning still works.';
-  const repeatSong = preferences.repeat && preferences.repeatMode === 'song';
-  const repeatQueue = preferences.repeat && preferences.repeatMode === 'queue';
   const isPresenting = fullscreen || stageOnly;
   // What the stage is showing; when this changes the content fades out and the new content fades in.
   const stageView = !active ? 'welcome' : gap ? 'gap' : finished ? 'finished' : !hasLyrics ? `bare:${active.id}` : `lyrics:${active.id}`;
@@ -115,7 +125,8 @@ function App() {
     void loadTracks().then((saved) => {
       if (!live) return;
       setTracks(saved);
-      if (saved[0]) selectTrack(saved[0]);
+      const firstQueued = saved.find(isInQueue);
+      if (firstQueued || saved[0]) selectTrack(firstQueued ?? saved[0]);
     }).catch(() => { if (live) storageError(); }).finally(() => { if (live) setReady(true); });
     return () => { live = false; clearInterval(transitionTimer.current); };
   }, [selectTrack, storageError]);
@@ -165,7 +176,7 @@ function App() {
       if (engine.fading) { cancelGap(); return; }
       // Repeating the current song: start it again straight away, with no gap.
       if (repeatSong) { play(); return; }
-      const next = tracks[activeIndex + 1] ?? (repeatQueue ? tracks[0] : undefined);
+      const next = nextQueuedTrack(tracks, activeIndex, repeatQueue);
       if (!next) { setFinished(true); return; }
       if (preferences.gap === 0) { selectTrack(next, true); return; }
       const deadline = Date.now() + preferences.gap * 1000;
@@ -180,6 +191,28 @@ function App() {
     engine.audio.addEventListener('ended', ended);
     return () => engine.audio.removeEventListener('ended', ended);
   }, [activeIndex, cancelGap, engine, play, preferences.gap, repeatQueue, repeatSong, selectTrack, tracks]);
+
+  useEffect(() => {
+    if (!gap) return;
+    const scheduled = tracks.find((track) => track.id === gap.nextId);
+    if (scheduled && isInQueue(scheduled)) return;
+
+    const replacement = nextQueuedTrack(tracks, activeIndex, repeatQueue);
+    clearInterval(transitionTimer.current);
+    transitionTimer.current = undefined;
+    if (!replacement) {
+      setGap(null);
+      setFinished(true);
+      return;
+    }
+    const deadline = Date.now() + gap.remaining * 1000;
+    setGap({ nextId: replacement.id, remaining: gap.remaining });
+    transitionTimer.current = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      if (!remaining) selectTrack(replacement, true);
+      else setGap({ nextId: replacement.id, remaining });
+    }, 200);
+  }, [activeIndex, gap, repeatQueue, selectTrack, tracks]);
 
   useEffect(() => {
     const sync = () => setFullscreen(Boolean(document.fullscreenElement));
@@ -220,7 +253,7 @@ function App() {
     if (playing && !fading) void engine.pause();
     else {
       if (engine.audio.ended) {
-        const next = tracks[activeIndex + 1] ?? (repeatQueue || finished ? tracks[0] : undefined);
+        const next = nextQueuedTrack(tracks, activeIndex, repeatQueue || finished);
         if (next) { selectTrack(next, true); return; }
         engine.seek(0);
       }
@@ -236,13 +269,14 @@ function App() {
   }, [engine, fading, playing]);
 
   function nextTrack() {
-    const next = tracks[activeIndex + 1] ?? (repeatQueue ? tracks[0] : undefined);
+    const next = nextQueuedTrack(tracks, activeIndex, repeatQueue);
     if (next) afterFadeOut(() => selectTrack(next, playing || Boolean(gap)));
   }
   function previousTrack() {
     cancelGap(); setFinished(false);
-    if (time > 3 || activeIndex === 0) afterFadeOut(() => { engine.seek(0); if (playing) play(); });
-    else if (tracks[activeIndex - 1]) afterFadeOut(() => selectTrack(tracks[activeIndex - 1], playing));
+    const previous = tracks.slice(0, activeIndex).reverse().find(isInQueue);
+    if (time > 3 || !previous) afterFadeOut(() => { engine.seek(0); if (playing) play(); });
+    else afterFadeOut(() => selectTrack(previous, playing));
   }
 
   useEffect(() => {
@@ -265,6 +299,12 @@ function App() {
   function updateTrack(updated: Track) {
     setTracks((current) => current.map((track) => track.id === updated.id ? updated : track));
     void storeTrack(updated).catch(storageError);
+  }
+
+  function setAllQueued(inQueue: boolean) {
+    const updated = tracks.map((track) => ({ ...track, inQueue }));
+    setTracks(updated);
+    void Promise.all(updated.map((track) => storeTrack(track))).catch(storageError);
   }
 
   function setPitch(semitones: number) {
@@ -404,9 +444,10 @@ function App() {
           <small>Drop MP3s here, or browse files</small>
           <span className="file-format">MP3, WAV, M4A & more</span>
         </button>
-        <div className="queue-meta"><span>{tracks.length ? `${tracks.length} song${tracks.length === 1 ? '' : 's'} · ${formatTime(totalDuration)}` : 'A good evening starts with a song'}</span>{tracks.length > 0 && <span className="autoplay-badge"><Repeat2 size={12} /> Auto-next</span>}</div>
+        <div className="queue-meta"><span>{tracks.length ? `${queuedTracks.length === tracks.length ? tracks.length : `${queuedTracks.length} of ${tracks.length}`} song${tracks.length === 1 ? '' : 's'} · ${formatTime(totalDuration)}` : 'A good evening starts with a song'}</span>{queuedTracks.length > 0 && <span className="autoplay-badge"><Repeat2 size={12} /> Auto-next</span>}</div>
+        <label className="queue-select-all"><input type="checkbox" aria-label="Select all for queue" checked={allQueued} ref={(input) => { if (input) input.indeterminate = partiallyQueued; }} disabled={!tracks.length} onChange={(event) => setAllQueued(event.target.checked)} /><span>Select all</span></label>
         <ol className="track-list" aria-label="Song arrangement">
-          {tracks.map((track, index) => <li key={track.id} draggable title="Drag anywhere on this song to reorder" onDragStart={(event) => startTrackDrag(track.id, event)} onDragEnd={finishTrackDrag} className={`track-row ${track.id === activeId ? 'selected' : ''} ${draggedTrackId === track.id ? 'dragging' : ''} ${dropTarget?.id === track.id ? `drop-${dropTarget.position}` : ''}`} onDragOver={(event) => {
+          {tracks.map((track, index) => <li key={track.id} draggable title="Drag anywhere on this song to reorder" onDragStart={(event) => startTrackDrag(track.id, event)} onDragEnd={finishTrackDrag} className={`track-row ${track.id === activeId ? 'selected' : ''} ${!isInQueue(track) ? 'not-queued' : ''} ${draggedTrackId === track.id ? 'dragging' : ''} ${dropTarget?.id === track.id ? `drop-${dropTarget.position}` : ''}`} onDragOver={(event) => {
             if (!draggedTrackRef.current || draggedTrackRef.current === track.id) return;
             event.preventDefault();
             event.dataTransfer.dropEffect = 'move';
@@ -424,8 +465,11 @@ function App() {
             void moveTrack(sourceId, insertionIndex - (sourceIndex < insertionIndex ? 1 : 0));
             finishTrackDrag();
           }}>
-            <button className="track-select" onClick={() => { if (track.id !== activeId) afterFadeOut(() => selectTrack(track, playing || Boolean(gap))); }} aria-label={`Select ${track.title}`} aria-current={track.id === activeId ? 'true' : undefined}>
+            <div className="track-index">
               <span className={`track-number ${track.id === activeId && playing ? 'is-playing' : ''}`}>{track.id === activeId && playing ? <span className="equalizer"><i /><i /><i /></span> : String(index + 1).padStart(2, '0')}</span>
+              <label className="track-queue-toggle" title="Include this song in automatic playback"><input type="checkbox" aria-label={`Include ${track.title} in playback queue`} checked={isInQueue(track)} onChange={(event) => updateTrack({ ...track, inQueue: event.target.checked })} /></label>
+            </div>
+            <button className="track-select" onClick={() => { if (track.id !== activeId) afterFadeOut(() => selectTrack(track, playing || Boolean(gap))); }} aria-label={`Select ${track.title}`} aria-current={track.id === activeId ? 'true' : undefined}>
               <span className="track-details"><strong>{track.title}</strong><small>{track.lyrics.some((line) => line.text) ? <><span className="lyrics-dot" /> Lyrics ready</> : <><span className="lyrics-dot pending" /> Needs lyrics</>}{track.minusOne && <span className="minus-one-badge" title="Minus-one ready">Minus-one</span>}<span className="track-duration">{formatTime(track.duration)}</span></small></span>
             </button>
             <div className="track-actions"><button className="tiny-button drag-handle" aria-label={`Reorder ${track.title} with keyboard`} title="Drag anywhere on the tile · use ↑ or ↓ with keyboard" onKeyDown={(event) => {
@@ -451,7 +495,7 @@ function App() {
           <FadeThrough viewKey={stageView}>
             {!active ? <div className="welcome-stage"><span className="stage-illustration"><AudioLines size={48} strokeWidth={1.1} /><span /><span /></span><p className="welcome-kicker">GOOD SONGS ARE BETTER SHARED</p><h3>Bring the songs.<br /><em>Sing them together.</em></h3><p>Add your MP3s. Find the words.<br />Let the next song take care of itself.</p><button className="button stage-cta" disabled={!ready} onClick={() => fileInput.current?.click()}><Plus size={17} /> Add your first songs</button><button className="demo-link" disabled={!ready} onClick={addDemo}><Headphones size={14} /> Or try a 32-second soundcheck</button></div>
             : gap ? <div className="gap-content"><span className="countdown">{gap.remaining}</span><p>A little room to breathe.</p><h3>{tracks.find((track) => track.id === gap.nextId)?.title}</h3><button className="button stage-cta" onClick={() => { const next = tracks.find((track) => track.id === gap.nextId); if (next) selectTrack(next, true); }}>Start next song <SkipForward size={15} /></button></div>
-            : finished ? <div className="finished-content"><span className="finished-icon"><Check size={32} /></span><p className="welcome-kicker">THAT WAS A LOVELY LITTLE SESSION</p><h3>Every voice.<br /><em>Part of the song.</em></h3><p>You’ve reached the end of your queue.</p><button className="button stage-cta" onClick={() => tracks[0] && selectTrack(tracks[0], true)}><RotateCcw size={16} /> Sing it again</button></div>
+            : finished ? <div className="finished-content"><span className="finished-icon"><Check size={32} /></span><p className="welcome-kicker">THAT WAS A LOVELY LITTLE SESSION</p><h3>Every voice.<br /><em>Part of the song.</em></h3><p>You’ve reached the end of your queue.</p><button className="button stage-cta" disabled={!queuedTracks.length} onClick={() => queuedTracks[0] && selectTrack(queuedTracks[0], true)}><RotateCcw size={16} /> Sing it again</button></div>
             : !hasLyrics ? <div className="no-lyrics"><Music2 size={36} strokeWidth={1.2} /><p className="welcome-kicker">A SONG WAITING FOR ITS WORDS</p><h3>{active.title}</h3><p>The music is ready. Let’s add something to sing.</p><div className="stage-buttons"><button className="button stage-cta" onClick={() => setTranscribeIds([active.id])}><Sparkles size={16} /> Generate lyrics</button><button className="button stage-secondary" onClick={() => setEditing(true)}><FileText size={16} /> Add lyrics</button></div><small>Or just press play and enjoy the music.</small></div>
             : <LyricStack trackId={active.id} lines={active.lyrics} window={lyricWin!} durationMs={lyricMs} pause={<>
               <span className="instrumental-notes"><Music2 size={30} /></span>
@@ -476,7 +520,7 @@ function App() {
           <button aria-label="Raise by a semitone" title="Raise by a semitone" disabled={!pitchReady || activePitch >= MAX_PITCH} onClick={() => setPitch(activePitch + 1)}><Plus size={12} /></button>
           {activePitch !== 0 && <button className="tuner-reset" aria-label="Reset to original key" title="Reset to original key" onClick={() => setPitch(0)}><RotateCcw size={11} /></button>}
         </div></div>}</div></div>
-      <div className="transport"><div className="transport-buttons"><span className="repeat-group"><span className={`repeat-scope ${preferences.repeat ? 'visible' : ''}`} role="group" aria-label="Repeat scope"><button aria-pressed={!repeatSong} title="Repeat the whole queue" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'queue' }))}>Queue</button><button aria-pressed={repeatSong} title="Repeat this song" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'song' }))}>Song</button></span><button className={`icon-button repeat-button ${preferences.repeat ? 'enabled' : ''}`} aria-label="Repeat" aria-pressed={preferences.repeat} title={!preferences.repeat ? 'Repeat is off' : repeatSong ? 'Repeating this song' : 'Repeating the whole queue'} onClick={() => setPreferences((value) => ({ ...value, repeat: !value.repeat }))}><span className="repeat-icon"><Repeat2 size={18} /></span></button></span><button className="icon-button" aria-label="Previous song or restart" disabled={!active} onClick={previousTrack}><SkipBack size={21} fill="currentColor" /></button><button className={`play-button ${fading ? 'fading' : ''}`} aria-label={gap ? 'Pause auto-advance' : playing && !fading ? 'Pause with fade' : 'Play'} disabled={!active} onClick={togglePlayback}>{gap || (playing && !fading) ? <Pause size={23} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</button><button className="icon-button" aria-label="Next song" disabled={!active || (activeIndex === tracks.length - 1 && !repeatQueue)} onClick={nextTrack}><SkipForward size={21} fill="currentColor" /></button><span className="transport-spacer" /></div><div className="seek-row"><span>{formatTime(time)}</span><input type="range" aria-label="Song position" aria-valuetext={`${formatTime(time)} of ${formatTime(actualDuration)}`} min={0} max={actualDuration || 1} step={0.1} value={Math.min(time, actualDuration || 1)} disabled={!active || !duration} style={{ '--progress': `${actualDuration ? time / actualDuration * 100 : 0}%` } as CSSProperties} onChange={(event) => { cancelGap(); setFinished(false); engine.seek(Number(event.target.value)); }} /><span>{formatTime(actualDuration)}</span></div></div>
+      <div className="transport"><div className="transport-buttons"><span className="repeat-group"><span className={`repeat-scope ${preferences.repeat ? 'visible' : ''}`} role="group" aria-label="Repeat scope"><button aria-pressed={!repeatSong} title="Repeat the whole queue" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'queue' }))}>Queue</button><button aria-pressed={repeatSong} title="Repeat this song" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'song' }))}>Song</button></span><button className={`icon-button repeat-button ${preferences.repeat ? 'enabled' : ''}`} aria-label="Repeat" aria-pressed={preferences.repeat} title={!preferences.repeat ? 'Repeat is off' : repeatSong ? 'Repeating this song' : 'Repeating the whole queue'} onClick={() => setPreferences((value) => ({ ...value, repeat: !value.repeat }))}><span className="repeat-icon"><Repeat2 size={18} /></span></button></span><button className="icon-button" aria-label="Previous song or restart" disabled={!active} onClick={previousTrack}><SkipBack size={21} fill="currentColor" /></button><button className={`play-button ${fading ? 'fading' : ''}`} aria-label={gap ? 'Pause auto-advance' : playing && !fading ? 'Pause with fade' : 'Play'} disabled={!active} onClick={togglePlayback}>{gap || (playing && !fading) ? <Pause size={23} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</button><button className="icon-button" aria-label="Next song" disabled={!active || !hasNextQueued} onClick={nextTrack}><SkipForward size={21} fill="currentColor" /></button><span className="transport-spacer" /></div><div className="seek-row"><span>{formatTime(time)}</span><input type="range" aria-label="Song position" aria-valuetext={`${formatTime(time)} of ${formatTime(actualDuration)}`} min={0} max={actualDuration || 1} step={0.1} value={Math.min(time, actualDuration || 1)} disabled={!active || !duration} style={{ '--progress': `${actualDuration ? time / actualDuration * 100 : 0}%` } as CSSProperties} onChange={(event) => { cancelGap(); setFinished(false); engine.seek(Number(event.target.value)); }} /><span>{formatTime(actualDuration)}</span></div></div>
       <div className="volume-controls"><button className={`soften-button ${softened ? 'softened' : ''}`} disabled={!active} aria-pressed={softened} title="Gently lower music to 22% · M" onClick={() => setSoftened((value) => !value)}><Waves size={17} /><span>{softened ? 'Restore' : 'Soften'}</span></button><div className="volume-slider">{preferences.volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}<input type="range" min={0} max={1} step={0.01} value={preferences.volume} aria-label="Volume" aria-valuetext={`${Math.round(preferences.volume * 100)} percent`} style={{ '--progress': `${preferences.volume * 100}%` } as CSSProperties} onChange={(event) => setPreferences((value) => ({ ...value, volume: Number(event.target.value) }))} /></div></div>
     </footer>
     <div className="page-footer"><span>MADE FOR THE MOMENTS BETWEEN US</span><span>{tracks.length ? `${readyLyrics} of ${tracks.length} songs with lyrics` : 'No account. Just your music.'}<span className="footer-divider">/</span><kbd>Space</kbd> to play or pause</span></div>
