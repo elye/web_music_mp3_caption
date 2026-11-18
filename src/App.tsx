@@ -20,11 +20,34 @@ import { Settings } from './components/Settings';
 import { TranscriptionDialog } from './components/TranscriptionDialog';
 import { MinusOneDialog } from './components/MinusOneDialog';
 import { DownloadDialog } from './components/DownloadDialog';
+import { VideoBackdrop } from './components/VideoBackdrop';
 
 const isInQueue = (track: Track) => track.inQueue !== false;
 
 function nextQueuedTrack(tracks: Track[], currentIndex: number, repeat: boolean) {
   return tracks.slice(currentIndex + 1).find(isInQueue) ?? (repeat ? tracks.find(isInQueue) : undefined);
+}
+
+function readVideoDuration(file: Blob): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const url = URL.createObjectURL(file);
+    const finish = (duration?: number) => {
+      clearTimeout(timeout);
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(url);
+      if (duration && Number.isFinite(duration)) resolve(duration);
+      else reject(new Error('This MP4 video could not be read.'));
+    };
+    const timeout = setTimeout(() => finish(), 15000);
+    video.onloadedmetadata = () => finish(video.videoWidth > 0 && video.videoHeight > 0 ? video.duration : undefined);
+    video.onerror = () => finish();
+    video.preload = 'metadata';
+    video.src = url;
+  });
 }
 
 function App() {
@@ -49,6 +72,7 @@ function App() {
   const [gap, setGap] = useState<{ nextId: string; remaining: number } | null>(null);
   const [finished, setFinished] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const videoInput = useRef<HTMLInputElement>(null);
   const appRef = useRef<HTMLDivElement>(null);
   const dragDepth = useRef(0);
   const draggedTrackRef = useRef<string | null>(null);
@@ -87,8 +111,10 @@ function App() {
     ? `Detected ${formatKey(active.key)}${active.key.confidence < CONFIDENT_KEY ? ' (a guess)' : ''}. Tuning applies to this song only.`
     : 'Working out the key… tuning still works.';
   const isPresenting = fullscreen || stageOnly;
+  const showingVideo = Boolean(active?.video && preferences.showVideo && !gap && !finished);
+  const videoOnly = showingVideo && (!preferences.showVideoCaptions || !hasLyrics);
   // What the stage is showing; when this changes the content fades out and the new content fades in.
-  const stageView = !active ? 'welcome' : gap ? 'gap' : finished ? 'finished' : !hasLyrics ? `bare:${active.id}` : `lyrics:${active.id}`;
+  const stageView = !active ? 'welcome' : gap ? 'gap' : finished ? 'finished' : videoOnly ? `video:${active.id}` : !hasLyrics ? `bare:${active.id}` : `lyrics:${active.id}`;
   const modalOpen = settingsOpen || editing || Boolean(transcribeIds) || Boolean(minusOneIds) || downloadOpen || Boolean(removeId);
 
   const notify = useCallback((text: string, kind?: 'error' | 'success') => setNotice({ text, kind }), []);
@@ -324,6 +350,21 @@ function App() {
     if (track) updateTrack({ ...track, lyrics, lyricSource: 'transcribed' });
   }
 
+  async function attachVideo(id: string, file: File) {
+    if (!/\.mp4$/i.test(file.name)) { notify('Choose an MP4 video.', 'error'); return; }
+    if (file.size > 100 * 1024 * 1024) { notify('Video must be no larger than 100 MB.', 'error'); return; }
+    try {
+      const videoDuration = await readVideoDuration(file);
+      const track = tracksRef.current.find((item) => item.id === id);
+      if (!track) return;
+      updateTrack({ ...track, video: file, videoFilename: file.name, videoDuration });
+      const difference = Math.abs(videoDuration - track.duration);
+      notify(difference > 2
+        ? `Video attached. Its length differs by ${Math.round(difference)} seconds; video, captions, and generated backing audio may not stay in sync.`
+        : 'Video attached. Its audio will be used for new lyrics, MP3 and minus-one generation.', difference > 2 ? 'error' : 'success');
+    } catch { notify('This MP4 video could not be read. Try another file.', 'error'); }
+  }
+
   async function addFiles(files: FileList | File[]) {
     if (importLock.current || !ready) return;
     importLock.current = true;
@@ -334,13 +375,16 @@ function App() {
     let duplicates = 0;
     try {
       for (const file of Array.from(files)) {
-        if (!/\.(mp3|wav|m4a|ogg|flac|aac|webm)$/i.test(file.name)) { failed.push(`${file.name}: unsupported audio format`); continue; }
+        if (!/\.(mp3|wav|m4a|ogg|flac|aac|webm|mp4)$/i.test(file.name)) { failed.push(`${file.name}: unsupported audio or video format`); continue; }
         if (file.size > 100 * 1024 * 1024) { failed.push(`${file.name}: larger than 100 MB`); continue; }
         if ([...tracks, ...added].some((track) => track.filename === file.name && track.file.size === file.size)) { duplicates++; continue; }
         try {
+          const isVideo = /\.mp4$/i.test(file.name);
+          const duration = isVideo ? await readVideoDuration(file) : await readDuration(file);
           const track: Track = {
-            id: crypto.randomUUID(), ...titleFromFilename(file.name), duration: await readDuration(file),
+            id: crypto.randomUUID(), ...titleFromFilename(file.name), duration,
             file, filename: file.name, lyrics: [], offset: 0,
+            ...(isVideo ? { video: file, videoFilename: file.name, videoDuration: duration } : {}),
           };
           added.push(track);
           await storeTrack(track).catch(() => { saveFailed = true; });
@@ -428,7 +472,8 @@ function App() {
   }} onDrop={(event) => {
     event.preventDefault(); dragDepth.current = 0; setDragging(false); if (!modalOpen) void addFiles(event.dataTransfer.files);
   }}>
-    <input ref={fileInput} type="file" accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.webm,audio/*" multiple hidden onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ''; }} />
+    <input ref={fileInput} type="file" accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,.webm,.mp4,audio/*,video/mp4" multiple hidden onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ''; }} />
+    <input ref={videoInput} type="file" accept=".mp4,video/mp4" aria-label="Attach MP4 video" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file && active) void attachVideo(active.id, file); event.target.value = ''; }} />
     <header className="topbar">
       <a className="brand" href="/" aria-label="Chorus home" onClick={(event) => event.preventDefault()}><span className="brand-mark"><AudioLines size={25} strokeWidth={2.4} /></span><span>chorus<span className="brand-dot">.</span></span></a>
       <span className="topbar-tagline">A little music. A little togetherness.</span>
@@ -441,8 +486,8 @@ function App() {
         <button className="upload-zone" onClick={() => fileInput.current?.click()} disabled={adding || !ready}>
           <span className="upload-icon">{adding || !ready ? <LoaderCircle size={22} className="spin" /> : <Plus size={24} />}</span>
           <strong>{!ready ? 'Opening your queue…' : adding ? 'Bringing your songs in…' : 'Bring your songs'}</strong>
-          <small>Drop MP3s here, or browse files</small>
-          <span className="file-format">MP3, WAV, M4A & more</span>
+          <small>Drop audio or MP4 video here, or browse files</small>
+          <span className="file-format">MP3, MP4, WAV, M4A & more</span>
         </button>
         <div className="queue-meta"><span>{tracks.length ? `${queuedTracks.length === tracks.length ? tracks.length : `${queuedTracks.length} of ${tracks.length}`} song${tracks.length === 1 ? '' : 's'} · ${formatTime(totalDuration)}` : 'A good evening starts with a song'}</span>{queuedTracks.length > 0 && <span className="autoplay-badge"><Repeat2 size={12} /> Auto-next</span>}</div>
         <label className="queue-select-all"><input type="checkbox" aria-label="Select all for queue" checked={allQueued} ref={(input) => { if (input) input.indeterminate = partiallyQueued; }} disabled={!tracks.length} onChange={(event) => setAllQueued(event.target.checked)} /><span>Select all</span></label>
@@ -490,12 +535,14 @@ function App() {
       <section className="main-panel" aria-label="Sing-along stage">
         <div className="section-heading"><div><span className="eyebrow">LESS FUSS. MORE VOICES.</span><h2>Make room for the music.</h2></div><button className="button secondary fullscreen-button" onClick={() => void toggleFullscreen()}><Maximize size={16} /> Fullscreen <kbd>F</kbd></button></div>
         <section className={`lyric-stage ${active ? 'has-song' : ''}`} aria-label="Lyrics" style={{ '--lyric-size': `${preferences.fontSize}px` } as CSSProperties}>
+          {active?.video && <VideoBackdrop video={active.video} audio={engine.audio} visible={showingVideo} dim={preferences.showVideoCaptions && hasLyrics ? preferences.videoDim : 0} />}
           <div className="stage-grain" aria-hidden="true" />
           <div className="stage-topline"><span className="stage-label"><span className={playing && !fading ? 'live-dot live' : 'live-dot'} />{gap ? 'UP NEXT' : !active ? 'THE STAGE IS YOURS' : fading ? 'FADING TO PAUSE' : playing ? 'NOW SINGING' : 'READY WHEN YOU ARE'}</span><div className="stage-top-actions">{active && <span className="stage-song-number">{String(activeIndex + 1).padStart(2, '0')} / {String(tracks.length).padStart(2, '0')}</span>}{isPresenting && <button className="icon-button light" aria-label="Exit fullscreen" onClick={() => void toggleFullscreen()}><Minimize size={20} /></button>}</div></div>
           <FadeThrough viewKey={stageView}>
             {!active ? <div className="welcome-stage"><span className="stage-illustration"><AudioLines size={48} strokeWidth={1.1} /><span /><span /></span><p className="welcome-kicker">GOOD SONGS ARE BETTER SHARED</p><h3>Bring the songs.<br /><em>Sing them together.</em></h3><p>Add your MP3s. Find the words.<br />Let the next song take care of itself.</p><button className="button stage-cta" disabled={!ready} onClick={() => fileInput.current?.click()}><Plus size={17} /> Add your first songs</button><button className="demo-link" disabled={!ready} onClick={addDemo}><Headphones size={14} /> Or try a 32-second soundcheck</button></div>
             : gap ? <div className="gap-content"><span className="countdown">{gap.remaining}</span><p>A little room to breathe.</p><h3>{tracks.find((track) => track.id === gap.nextId)?.title}</h3><button className="button stage-cta" onClick={() => { const next = tracks.find((track) => track.id === gap.nextId); if (next) selectTrack(next, true); }}>Start next song <SkipForward size={15} /></button></div>
             : finished ? <div className="finished-content"><span className="finished-icon"><Check size={32} /></span><p className="welcome-kicker">THAT WAS A LOVELY LITTLE SESSION</p><h3>Every voice.<br /><em>Part of the song.</em></h3><p>You’ve reached the end of your queue.</p><button className="button stage-cta" disabled={!queuedTracks.length} onClick={() => queuedTracks[0] && selectTrack(queuedTracks[0], true)}><RotateCcw size={16} /> Sing it again</button></div>
+            : videoOnly ? <div />
             : !hasLyrics ? <div className="no-lyrics"><Music2 size={36} strokeWidth={1.2} /><p className="welcome-kicker">A SONG WAITING FOR ITS WORDS</p><h3>{active.title}</h3><p>The music is ready. Let’s add something to sing.</p><div className="stage-buttons"><button className="button stage-cta" onClick={() => setTranscribeIds([active.id])}><Sparkles size={16} /> Generate lyrics</button><button className="button stage-secondary" onClick={() => setEditing(true)}><FileText size={16} /> Add lyrics</button></div><small>Or just press play and enjoy the music.</small></div>
             : <LyricStack trackId={active.id} lines={active.lyrics} window={lyricWin!} durationMs={lyricMs} pause={<>
               <span className="instrumental-notes"><Music2 size={30} /></span>
@@ -503,9 +550,17 @@ function App() {
               {nextLine && <span className="lyrics-count-in">Words in {Math.max(1, Math.ceil(nextLine.start + active.offset - time))}s</span>}
             </>} />}
           </FadeThrough>
+          {active?.video && <div className="video-controls" role="group" aria-label="Video display">
+            <button type="button" aria-pressed={preferences.showVideo} onClick={() => setPreferences((value) => ({ ...value, showVideo: !value.showVideo }))}>Video {preferences.showVideo ? 'on' : 'off'}</button>
+            {preferences.showVideo && <>
+              <button type="button" aria-pressed={preferences.showVideoCaptions} onClick={() => setPreferences((value) => ({ ...value, showVideoCaptions: !value.showVideoCaptions }))}>Captions {preferences.showVideoCaptions ? 'on' : 'off'}</button>
+              {preferences.showVideoCaptions && <><label>Dim <input type="range" aria-label="Video dim" min={0} max={1} step={0.05} value={preferences.videoDim} onChange={(event) => setPreferences((value) => ({ ...value, videoDim: Number(event.target.value) }))} /> {Math.round(preferences.videoDim * 100)}%</label>
+                <span role="group" aria-label="Video dim presets">{[0, 0.5, 0.8].map((amount) => <button type="button" key={amount} aria-pressed={preferences.videoDim === amount} onClick={() => setPreferences((value) => ({ ...value, videoDim: amount }))}>{Math.round(amount * 100)}%</button>)}</span></>}
+            </>}
+          </div>}
           <div className="stage-bottomline"><span>{active ? <><Music2 size={13} /> {active.title}{usingMinusOne && <span className="stage-version">Minus-one</span>}</> : <><Waves size={15} /> A space for every voice</>}</span><div className="stage-caption-tools"><button aria-label="Smaller lyrics" disabled={preferences.fontSize <= 32} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.max(32, value.fontSize - 4) }))}>A<span>−</span></button><span className="caption-tool-divider" /><button aria-label="Larger lyrics" disabled={preferences.fontSize >= 88} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.min(88, value.fontSize + 4) }))}>A<span>+</span></button></div></div>
         </section>
-        <div className="under-stage"><div className="stage-note"><span className="note-dot" /><span>{hasLyrics ? `${active?.lyrics.filter((line) => line.text).length} lines · ${active?.lyricSource === 'transcribed' ? 'AI lyrics — please review' : 'Timed lyrics ready'}` : 'Big words. Shared moments. No page-turning.'}</span></div><div className="lyric-actions">{active && hasLyrics && <div className="offset-controls"><span>Lyric delay</span><button aria-label="Show lyrics 0.5 seconds earlier" onClick={() => updateTrack({ ...active, offset: Math.max(-30, Math.round((active.offset - 0.5) * 10) / 10) })}>−</button><span className="mono" title="Positive values show lyrics later">{active.offset > 0 ? '+' : ''}{active.offset.toFixed(1)}s</span><button aria-label="Show lyrics 0.5 seconds later" onClick={() => updateTrack({ ...active, offset: Math.min(30, Math.round((active.offset + 0.5) * 10) / 10) })}>+</button></div>}{active && <button className="text-button" onClick={() => setDownloadOpen(true)}><Download size={14} />Download</button>}{active && <button className="text-button" onClick={() => setEditing(true)}><FileText size={14} />{hasLyrics ? 'Edit lyrics' : 'Add lyrics'}</button>}</div></div>
+        <div className="under-stage"><div className="stage-note"><span className="note-dot" /><span>{hasLyrics ? `${active?.lyrics.filter((line) => line.text).length} lines · ${active?.lyricSource === 'transcribed' ? 'AI lyrics — please review' : 'Timed lyrics ready'}` : 'Big words. Shared moments. No page-turning.'}</span></div><div className="lyric-actions">{active && showingVideo && !hasLyrics && <button className="text-button" onClick={() => setTranscribeIds([active.id])}><Sparkles size={14} />Generate lyrics</button>}{active && <button className="text-button" onClick={() => videoInput.current?.click()}>{active.video ? 'Replace video' : 'Attach MP4'}</button>}{active?.video && <button className="text-button" onClick={() => { updateTrack({ ...active, video: undefined, videoFilename: undefined, videoDuration: undefined }); notify('Video removed from this song. Original files are unchanged.'); }}>Remove video</button>}{active && hasLyrics && <div className="offset-controls"><span>Lyric delay</span><button aria-label="Show lyrics 0.5 seconds earlier" onClick={() => updateTrack({ ...active, offset: Math.max(-30, Math.round((active.offset - 0.5) * 10) / 10) })}>−</button><span className="mono" title="Positive values show lyrics later">{active.offset > 0 ? '+' : ''}{active.offset.toFixed(1)}s</span><button aria-label="Show lyrics 0.5 seconds later" onClick={() => updateTrack({ ...active, offset: Math.min(30, Math.round((active.offset + 0.5) * 10) / 10) })}>+</button></div>}{active && <button className="text-button" onClick={() => setDownloadOpen(true)}><Download size={14} />Download</button>}{active && <button className="text-button" onClick={() => setEditing(true)}><FileText size={14} />{hasLyrics ? 'Edit lyrics' : 'Add lyrics'}</button>}</div></div>
         <div className="feature-strip"><div><span className="feature-icon"><ListMusic size={19} /></span><span><strong>One seamless queue</strong><small>From the first song to the last.</small></span></div><div><span className="feature-icon"><Volume1 size={20} /></span><span><strong>A gentler kind of pause</strong><small>Fade out. Take a breath. Carry on.</small></span></div><div><span className="feature-icon"><CloudOff size={18} /></span><span><strong>At home on your device</strong><small>Your files. Your gathering.</small></span></div></div>
       </section>
     </main>
@@ -526,7 +581,7 @@ function App() {
     <div className="page-footer"><span>MADE FOR THE MOMENTS BETWEEN US</span><span>{tracks.length ? `${readyLyrics} of ${tracks.length} songs with lyrics` : 'No account. Just your music.'}<span className="footer-divider">/</span><kbd>Space</kbd> to play or pause</span></div>
 
     {notice && <div className={`toast ${notice.kind || ''}`} role={notice.kind === 'error' ? 'alert' : 'status'}><span>{notice.text}</span><button aria-label="Dismiss notification" onClick={() => setNotice(null)}><X size={16} /></button></div>}
-    {dragging && !modalOpen && <div className="drop-overlay"><Upload size={48} /><h2>Good songs belong here.</h2><p>Drop your audio files to add them to the queue.</p></div>}
+    {dragging && !modalOpen && <div className="drop-overlay"><Upload size={48} /><h2>Good songs belong here.</h2><p>Drop audio or MP4 video files to add them to the queue.</p></div>}
     {settingsOpen && <Settings preferences={preferences} onChange={setPreferences} onClose={() => setSettingsOpen(false)} />}
     {editing && active && <LyricsEditor track={active} time={time} playing={playing && !fading} onToggle={togglePlayback} onSave={updateTrack} onClose={() => setEditing(false)} />}
     {transcribeIds && <TranscriptionDialog tracks={tracks.filter((track) => transcribeIds.includes(track.id))} onSave={saveTranscription} onClose={() => setTranscribeIds(null)} />}

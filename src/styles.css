@@ -156,6 +156,11 @@ kbd { font-family: inherit; font-size: 9px; display: inline-block; padding: 1px 
 .stage-cta:hover:not(:disabled) { background: #f0d6b4; border-color: #f0d6b4; }
 .demo-link { margin: 13px auto 0; padding: 5px 10px; display: flex; gap: 6px; align-items: center; background: none; border: 0; color: #a19a8d; font-size: 9px; }
 .demo-link:hover:not(:disabled) { color: #e4ceb0; }
+.video-controls { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 7px; margin: 8px 0; color: #fff; font-size: 10px; }
+.video-controls button { color: #eee5d6; background: #19191dc9; border: 1px solid #ffffff50; border-radius: 5px; padding: 5px 8px; font-size: 10px; }
+.video-controls button[aria-pressed='true'] { border-color: #e2c39c; color: #fff; }
+.video-controls label, .video-controls [role='group'] { display: inline-flex; align-items: center; gap: 5px; }
+.video-controls input[type='range'] { flex: none; width: 72px; }
 .stage-bottomline { border-top: 1px solid #ffffff0c; padding-top: 12px; }
 .stage-bottomline > span { display: flex; align-items: center; gap: 7px; font-size: 9px; color: #99968d; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stage-bottomline > span svg { flex-shrink: 0; }
@@ -197,7 +202,7 @@ kbd { font-family: inherit; font-size: 9px; display: inline-block; padding: 1px 
 .under-stage { display: flex; justify-content: space-between; align-items: center; min-height: 48px; gap: 12px; }
 .stage-note { display: flex; align-items: center; gap: 7px; color: #8a8277; font-size: 9px; }
 .note-dot { width: 4px; height: 4px; background: #ad9a80; border-radius: 50%; flex-shrink: 0; }
-.lyric-actions { display: flex; align-items: center; gap: 14px; }
+.lyric-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
 .text-button { display: inline-flex; align-items: center; gap: 5px; background: transparent; border: none; color: #897459; padding: 6px 0; font-size: 10px; white-space: nowrap; }
 .text-button:hover { color: var(--orange); }
 .offset-controls { display: flex; align-items: center; gap: 5px; font-size: 9px; color: #92897a; }

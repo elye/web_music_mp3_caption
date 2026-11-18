@@ -10,6 +10,8 @@ const worker = (transcribe = async () => ({ lyrics: [] }), separate = async () =
   minusOneStatus: async () => ({ minusOneAvailable: true, minusOneModel: 'htdemucs' }),
   transcribe,
   separate,
+  mp3Status: async () => ({ mp3Available: true }),
+  convertMp3: async () => ({ buffer: Buffer.from('ID3converted') }),
 });
 const song = (type = 'audio/mpeg') => {
   const form = new FormData();
@@ -163,5 +165,62 @@ test('minus-one and transcription share one worker slot', async () => {
     assert.equal((await fetch(`${url}/api/minus-one`, { method: 'POST', body: song() })).status, 429);
     release();
     assert.equal((await first).status, 200);
+  });
+});
+
+const mp4 = (type = 'video/mp4') => {
+  const form = new FormData();
+  form.append('audio', new Blob(['video bytes'], { type }), 'song.mp4');
+  return form;
+};
+
+test('MP3 API returns local conversion and minus-one accepts MP4 audio', async () => {
+  let converted = false;
+  let separated = false;
+  const local = { ...worker(undefined, async ({ buffer }) => { separated = buffer.toString() === 'video bytes'; return { buffer: Buffer.from('ID3backing') }; }),
+    convertMp3: async ({ buffer }) => { converted = buffer.toString() === 'video bytes'; return { buffer: Buffer.from('ID3converted') }; } };
+  await withServer({ transcriber: local }, async (url) => {
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).mp3Available, true);
+    const response = await fetch(`${url}/api/mp3`, { method: 'POST', body: mp4() });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'audio/mpeg');
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    assert.equal(Buffer.from(await response.arrayBuffer()).toString(), 'ID3converted');
+    assert.equal((await fetch(`${url}/api/minus-one`, { method: 'POST', body: mp4() })).status, 200);
+    assert.ok(converted && separated);
+  });
+});
+
+test('MP3 API fails closed, rejects invalid and foreign requests, and sanitizes failures', async () => {
+  await withServer({ transcriber: { ...worker(), mp3Status: async () => ({ mp3Available: false }), convertMp3: () => assert.fail('Must not run') } }, async (url) => {
+    const response = await fetch(`${url}/api/mp3`, { method: 'POST', body: mp4() });
+    assert.equal(response.status, 503);
+    assert.match((await response.json()).error, /setup:local/);
+  });
+  await withServer({ transcriber: { ...worker(), convertMp3: () => { throw new Error('private path'); } } }, async (url) => {
+    assert.equal((await fetch(`${url}/api/mp3`, { method: 'POST', body: mp4('text/plain') })).status, 400);
+    assert.equal((await fetch(`${url}/api/mp3`, { method: 'POST', body: new FormData() })).status, 400);
+    assert.equal((await fetch(`${url}/api/mp3`, { method: 'POST', headers: { Origin: 'https://untrusted.example' }, body: mp4() })).status, 403);
+    const response = await fetch(`${url}/api/mp3`, { method: 'POST', body: mp4() });
+    assert.equal(response.status, 500);
+    assert.doesNotMatch((await response.json()).error, /private/);
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).busy, false);
+  });
+});
+
+test('cancelled MP3 conversion holds the shared slot until the worker exits', async () => {
+  let started, release, workerSignal;
+  const began = new Promise((resolve) => { started = resolve; });
+  const exited = new Promise((resolve) => { release = resolve; });
+  await withServer({ transcriber: { ...worker(), convertMp3: async ({ signal }) => { workerSignal = signal; started(); await exited; return { buffer: Buffer.from('ID3') }; } } }, async (url) => {
+    const controller = new AbortController();
+    const pending = fetch(`${url}/api/mp3`, { method: 'POST', body: mp4(), signal: controller.signal }).catch(() => {});
+    await began; controller.abort(); await wait(50);
+    assert.equal(workerSignal.aborted, true);
+    assert.equal((await fetch(`${url}/api/minus-one`, { method: 'POST', body: mp4() })).status, 429);
+    assert.equal((await fetch(`${url}/api/transcribe`, { method: 'POST', body: body() })).status, 429);
+    assert.equal((await fetch(`${url}/api/mp3`, { method: 'POST', body: mp4() })).status, 429);
+    release(); await pending; await wait(20);
+    assert.equal((await fetch(`${url}/api/status`).then((r) => r.json())).busy, false);
   });
 });

@@ -643,6 +643,88 @@ test('tunes each song live, shows the shifted key, and remembers it', async ({ p
   expect(errors).toEqual([]);
 });
 
+function makeMp4(): Buffer | null {
+  const dir = mkdtempSync(join(tmpdir(), 'chorus-video-'));
+  try {
+    const file = join(dir, 'song.mp4');
+    execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=10:d=12', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=12', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', file]);
+    return readFileSync(file);
+  } catch { return null; }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('MP4 import plays synchronized video with persistent caption and dim controls', async ({ page }) => {
+  const mp4 = makeMp4();
+  test.skip(!mp4, 'ffmpeg with H.264 and AAC encoders is needed for this video test');
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Add your first songs' }).waitFor();
+  await page.locator('input[type=file]').first().setInputFiles({ name: 'Video song.mp4', mimeType: 'video/mp4', buffer: mp4! });
+  await expect(page.locator('.track-row')).toHaveCount(1);
+  await expect(page.locator('.video-backdrop__video')).toBeVisible();
+  await page.locator('.lyric-actions').getByRole('button', { name: 'Add lyrics' }).click();
+  await page.getByLabel('Timed lyrics').fill('[00:00.00]Hello from video\n[00:05.00]Another line');
+  await page.getByRole('button', { name: 'Save lyrics' }).click();
+  await expect(page.locator('.current-lyric')).toHaveText('Hello from video');
+  await page.getByRole('button', { name: 'Captions on' }).click();
+  await expect(page.locator('.current-lyric')).toHaveCount(0);
+  await expect(page.locator('.video-backdrop__dim')).toHaveCSS('opacity', '0');
+  await page.getByRole('button', { name: 'Captions off' }).click();
+  await page.getByRole('button', { name: '80%', exact: true }).click();
+  await expect(page.locator('.video-backdrop__dim')).toHaveCSS('opacity', '0.8');
+  await page.getByRole('button', { name: 'Video on' }).click();
+  await expect(page.locator('.video-backdrop__video')).not.toBeVisible();
+  await expect(page.locator('.current-lyric')).toHaveText('Hello from video');
+  await page.getByRole('button', { name: 'Video off' }).click();
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect.poll(() => page.locator('.video-backdrop__video').evaluate((node: HTMLVideoElement) => !node.paused && node.currentTime > 0)).toBe(true);
+  await page.getByRole('slider', { name: 'Song position' }).fill('6');
+  await expect.poll(() => page.locator('.video-backdrop__video').evaluate((node: HTMLVideoElement) => node.currentTime)).toBeGreaterThan(5.5);
+  await page.reload();
+  await expect(page.locator('.track-row')).toHaveCount(1);
+  await expect(page.locator('.video-backdrop__dim')).toHaveCSS('opacity', '0.8');
+  await expect(page.locator('.video-backdrop__video')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+});
+
+test('attached MP4 supplies audio for local generation and can be downloaded as MP3', async ({ page }) => {
+  const mp4 = makeMp4();
+  test.skip(!mp4, 'ffmpeg with H.264 and AAC encoders is needed for this video test');
+  const minusBodies: Buffer[] = [];
+  const transcriptBodies: Buffer[] = [];
+  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: true, minusOneAvailable: true, busy: false } }));
+  await page.route('**/api/transcribe', (route) => { const body = route.request().postDataBuffer(); if (body) transcriptBodies.push(body); return route.fulfill({ json: { lyrics: [{ start: 0, end: 2, text: 'Generated line' }] } }); });
+  await page.route('**/api/minus-one', (route) => { const body = route.request().postDataBuffer(); if (body) minusBodies.push(body); return route.fulfill({ contentType: 'audio/mpeg', body: wav() }); });
+  await page.route('**/api/mp3', (route) => route.fulfill({ contentType: 'audio/mpeg', body: wav() }));
+  await page.goto('/');
+  await importSongs(page);
+  await page.getByLabel('Attach MP4 video').setInputFiles({ name: 'attached.mp4', mimeType: 'video/mp4', buffer: mp4! });
+  await expect(page.getByText('Video attached.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Video on' }).click();
+  await page.locator('.no-lyrics').getByRole('button', { name: 'Generate lyrics', exact: true }).click();
+  await page.getByRole('button', { name: 'Transcribe song' }).click();
+  await expect(page.getByText('Finished. Review the words and timing before your session.')).toBeVisible();
+  const chunk = transcriptBodies[0];
+  const wavStart = chunk.indexOf('RIFF');
+  expect(wavStart).toBeGreaterThanOrEqual(0);
+  let crossings = 0;
+  for (let i = wavStart + 46; i < wavStart + 44 + 16000 * 2; i += 2) {
+    if (chunk.readInt16LE(i - 2) <= 0 && chunk.readInt16LE(i) > 0) crossings++;
+  }
+  expect(crossings).toBeGreaterThan(700); // The MP4 is 880 Hz; the original WAV is 440 Hz.
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.locator('.current-lyric')).toHaveText('Generated line');
+  await page.getByRole('button', { name: 'Minus-one', exact: true }).click();
+  await page.getByRole('button', { name: 'Generate for', exact: false }).click();
+  await expect(page.getByText('Finished. Use the Original / Minus-one switch in the player to compare.')).toBeVisible();
+  expect(minusBodies[0]?.includes(Buffer.from('attached.mp4'))).toBe(true);
+  expect(minusBodies[0]?.includes(Buffer.from('video/mp4'))).toBe(true);
+  await page.getByRole('button', { name: 'Done' }).click();
+  await page.locator('.lyric-actions').getByRole('button', { name: 'Download' }).click();
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Generate MP3' }).click();
+  expect((await download).suggestedFilename()).toBe('attached.mp3');
+});
+
 test('falls back to the basic shifter when the voice-preserving one cannot load', async ({ page }) => {
   // Block the lazily loaded shifter module (dev and production file names differ).
   await page.route(/\/signalsmith-stretch\.js|\/assets\/SignalsmithStretch-/, (route) => route.abort());

@@ -18,6 +18,10 @@ export interface Track {
   artist: string;
   duration: number;
   file: Blob;
+  /** Optional MP4 associated with the song; its audio is used for generation. */
+  video?: Blob;
+  videoFilename?: string;
+  videoDuration?: number;
   /** Backing track with the vocals removed, generated locally. */
   minusOne?: Blob;
   /** Whether this song participates in automatic queue playback; absent means included. */
@@ -43,6 +47,9 @@ export interface Preferences {
   highContrast: boolean;
   /** Play the minus-one version of songs that have one. */
   minusOne: boolean;
+  showVideo: boolean;
+  showVideoCaptions: boolean;
+  videoDim: number;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -54,4 +61,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   fade: 1.2,
   highContrast: false,
   minusOne: false,
+  showVideo: true,
+  showVideoCaptions: true,
+  videoDim: 0.5,
 };
