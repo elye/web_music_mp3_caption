@@ -26,6 +26,7 @@ export interface Track {
   showVideo?: boolean;
   showVideoCaptions?: boolean;
   videoDim?: number;
+  videoBlur?: boolean;
   useMinusOne?: boolean;
   /** Backing track with the vocals removed, generated locally. */
   minusOne?: Blob;

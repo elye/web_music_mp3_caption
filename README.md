@@ -31,7 +31,7 @@ Open **http://127.0.0.1:3001**. Express serves the built app and local transcrip
 
 - Import one or many MP3s or MP4 videos by file picker or drag-and-drop. WAV, M4A, OGG, FLAC, AAC, and WebM are also accepted when the browser can decode them. Maximum 100 MB per file.
 - Attach or replace an MP4 on an existing song. The song remains the playback clock; the muted video follows its play, pause and seek position, including when playing a minus-one. Match the original's timing: the app warns if their lengths differ, but equal lengths do not guarantee alignment. Attach videos with audio when generating lyrics, MP3s or minus-ones from them.
-- Turn video and its captions on or off from the playback bar, including fullscreen. When captions are on, adjust video dimming with the slider. These display choices are saved locally for each song.
+- Turn video and its captions on or off from the playback bar, including fullscreen. When captions are on, adjust video dimming with the slider. The blur checkbox is shown when captions are on and uses the same level: higher dimming means stronger blur. Turning captions off removes dimming and blur; turning them back on restores the saved settings. These display choices are saved locally for each song.
 - Save audio, lyrics, queue order, and preferences locally. Reloading restores the queue **paused**; it never starts playing unexpectedly.
 - Play tracks sequentially with a selectable 0 / 3 / 5 / 10 second gap. A countdown can be paused or skipped. Repeat the queue if desired.
 - Display a large active lyric line, the previous line, and the next line. Instrumental gaps and lyric count-ins are supported.

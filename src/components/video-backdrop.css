@@ -16,6 +16,11 @@
 
 .video-backdrop__video {
   object-fit: cover;
+  transition: filter 300ms ease, transform 300ms ease;
+}
+
+.video-backdrop__video--blurred {
+  transform: scale(1.04);
 }
 
 .video-backdrop__dim {
@@ -24,5 +29,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .video-backdrop__dim { transition: none; }
+  .video-backdrop__video, .video-backdrop__dim { transition: none; }
 }

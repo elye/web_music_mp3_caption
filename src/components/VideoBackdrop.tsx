@@ -6,9 +6,10 @@ interface VideoBackdropProps {
   audio: HTMLAudioElement;
   visible: boolean;
   dim: number;
+  blur: number;
 }
 
-export function VideoBackdrop({ video, audio, visible, dim }: VideoBackdropProps) {
+export function VideoBackdrop({ video, audio, visible, dim, blur }: VideoBackdropProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -101,9 +102,10 @@ export function VideoBackdrop({ video, audio, visible, dim }: VideoBackdropProps
   }, [video, audio]);
 
   const opacity = Number.isFinite(dim) ? Math.max(0, Math.min(1, dim)) : 0;
+  const blurLevel = Number.isFinite(blur) ? Math.max(0, Math.min(1, blur)) : 0;
   return (
     <div className="video-backdrop" aria-hidden="true" style={{ visibility: visible ? 'visible' : 'hidden' }}>
-      <video ref={videoRef} className="video-backdrop__video" muted playsInline preload="auto" />
+      <video ref={videoRef} className={`video-backdrop__video${blurLevel > 0 ? ' video-backdrop__video--blurred' : ''}`} style={{ filter: blurLevel > 0 ? `blur(${blurLevel * 12}px)` : undefined }} muted playsInline preload="auto" />
       <div className="video-backdrop__dim" style={{ opacity }} />
     </div>
   );
