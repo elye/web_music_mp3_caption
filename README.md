@@ -29,7 +29,9 @@ Open **http://127.0.0.1:3001**. Express serves the built app and local transcrip
 
 ## What it does
 
-- Import one or many MP3s by file picker or drag-and-drop. WAV, M4A, OGG, FLAC, AAC, and WebM are also accepted when the browser can decode them. Maximum 100 MB per file.
+- Import one or many MP3s or MP4 videos by file picker or drag-and-drop. WAV, M4A, OGG, FLAC, AAC, and WebM are also accepted when the browser can decode them. Maximum 100 MB per file.
+- Attach or replace an MP4 on an existing song. The song remains the playback clock; the muted video follows its play, pause and seek position, including when playing a minus-one. Match the original's timing: the app warns if their lengths differ, but equal lengths do not guarantee alignment. Attach videos with audio when generating lyrics, MP3s or minus-ones from them.
+- Turn video and its captions on or off from the playback bar, including fullscreen. When captions are on, adjust video dimming with the slider. The blur checkbox is shown when captions are on and uses the same level: higher dimming means stronger blur. Turning captions off removes dimming and blur; turning them back on restores the saved settings. These display choices are saved locally for each song.
 - Save audio, lyrics, queue order, and preferences locally. Reloading restores the queue **paused**; it never starts playing unexpectedly.
 - Play tracks sequentially with a selectable 0 / 3 / 5 / 10 second gap. A countdown can be paused or skipped. Repeat the queue if desired.
 - Display a large active lyric line, the previous line, and the next line. Instrumental gaps and lyric count-ins are supported.
@@ -83,7 +85,7 @@ The queue-wide button processes tracks missing lyrics. If every track already ha
 
 **What runs where:**
 
-1. Your browser reads the local MP3, resamples it to mono PCM, and sends six-minute chunks over **loopback only**, to `127.0.0.1` on the same computer.
+1. Your browser reads the song's attached MP4 if present, otherwise its original audio, resamples it to mono PCM, and sends six-minute chunks over **loopback only**, to `127.0.0.1` on the same computer.
 2. The helper starts a local Python worker. `faster-whisper` reads the installed model from disk and transcribes on your CPU using int8 inference, with word-level timestamps.
 3. The worker groups words into caption lines at pauses (0.9 seconds), with a 42-character or 8-second line limit. Timed lyrics return to your browser and are saved in IndexedDB. No external service receives the audio, lyrics, or metadata.
 
@@ -102,12 +104,12 @@ The queue-wide button processes tracks missing lyrics. If every track already ha
 
 A **minus-one** is the song with the singer removed. Chorus makes it on your computer with Demucs (`htdemucs`) and keeps it beside the original.
 
-1. Choose **Make minus-one** in the queue. It processes songs that do not have one yet, or offers to replace them all. Or click **Minus-one** in the player when a song has none.
+1. Choose **Make minus-one** in the queue. It processes songs that do not have one yet, or offers to replace them all. Or choose **Minus-one** from the playback version dropdown when a song has none.
 2. Wait. Roughly a fraction of the song's length up to about its full length on a typical CPU. You can stop at any time; finished songs are saved, and a failed or cancelled run never removes an existing minus-one.
    **Already have a minus-one?** In the same dialog, choose **Upload your own** next to **Generate** (when several songs are listed, use the link under each song) (MP3, WAV, M4A, OGG, FLAC, AAC, or WebM, up to 100 MB). It is saved in this browser only and never sent to the helper, so it works without `setup:local`. Chorus warns if its length differs from the original by more than 2 seconds, since it may drift out of sync with the lyrics. Downloads keep the uploaded file's format.
-3. Switch between **Original** and **Minus-one** in the player bar (or press **V**) at any time, including mid-song. The switch is a 50 ms crossfade with no gap: both versions play together in step (the original is the clock, and the minus-one is kept silently aligned, with drift corrected by an imperceptible speed nudge), so nothing reloads or seeks. This uses about twice the decoding of one version while a song with a minus-one plays. The choice is remembered for other songs that have a minus-one.
+3. Choose **Original** or **Minus-one** from the playback version dropdown in the player bar (or press **V**) at any time, including mid-song. The switch is a 50 ms crossfade with no gap: both versions play together in step (the original is the clock, and the minus-one is kept silently aligned, with drift corrected by an imperceptible speed nudge), so nothing reloads or seeks. This uses about twice the decoding of one version while a song with a minus-one plays. The choice is remembered separately for each song.
 
-**Download.** Choose **Download** under the stage for the original file, the minus-one MP3, and the `.lrc` lyrics. The original is exactly the file you imported.
+**Download.** Choose **Download** under the stage for the original file, attached video, minus-one, and `.lrc` lyrics. The original is exactly the file you imported. When a video is attached, **Generate MP3** extracts its first audio track locally as a 192 kbps stereo MP3 for download; it does not replace the original song. This requires the Python/PyAV runtime from `pnpm setup:local` (or `pnpm setup:local --skip-minus-one`) and uses the same local worker slot and temporary-file protections as minus-one generation. Transcription and minus-one generation also use the attached video's audio, rather than the original song. Existing lyrics and minus-ones are not replaced when attaching or replacing a video; regenerate them if needed.
 
 **What runs where:** the browser sends the song to `127.0.0.1` only. The helper decodes it with the bundled PyAV, separates it into drums, bass, other, and vocals, sums everything except the vocals, and encodes a 192 kbps stereo MP3 that comes back to the browser and is saved in IndexedDB. The worker has the same offline guards as transcription (network calls fail, weights load only from `.local-transcription/cache/torch/`) and its temporary files are removed after success, failure, or cancellation. Minus-one and transcription share one worker slot, so only one job runs at a time.
 
@@ -152,7 +154,7 @@ The `--offline` flag uses pip's `--no-index`, never calls the model registry, an
 
 ## Local storage and deployment boundaries
 
-Audio blobs (original and minus-one), lyrics, and order are saved in **IndexedDB** under the browser origin. Preferences use `localStorage`. Nothing is synced to an account. Browser storage is best-effort: private browsing, low disk space, eviction, clearing site data, or switching browsers/origins may remove or hide the queue. Storage failures are reported and session playback remains available. Keep original MP3s and export valuable LRC edits. Multiple open tabs are not synchronized; use one leader tab per session.
+Audio and video blobs (original, attached MP4, and minus-one), lyrics, and order are saved in **IndexedDB** under the browser origin. Preferences use `localStorage`. Nothing is synced to an account. Browser storage is best-effort: private browsing, low disk space, eviction, clearing site data, or switching browsers/origins may remove or hide the queue. Storage failures are reported and session playback remains available. Keep original MP3s and export valuable LRC edits. Multiple open tabs are not synchronized; use one leader tab per session.
 
 The server binds to **127.0.0.1**, not your network interfaces. The shipped app is intended to run on the leader's computer and project/mirror that screen. It does **not** synchronize separate audience devices.
 

@@ -24,6 +24,8 @@ export function createLocalTranscriber({ root = projectRoot, spawnImpl = spawn, 
   const separationTimeout = boundedNumber(process.env.LOCAL_SEPARATION_TIMEOUT_SECONDS, 1800, 1, 14400) * 1000;
   const threads = Math.floor(boundedNumber(process.env.LOCAL_WHISPER_THREADS, 4, 1, 16));
 
+  const pythonPath = () => process.env.LOCAL_WHISPER_PYTHON ? resolve(process.env.LOCAL_WHISPER_PYTHON) : join(local, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+
   async function configuration() {
     const saved = await readFile(join(local, 'config.json'), 'utf8').then(JSON.parse).catch(() => ({}));
     const model = process.env.LOCAL_WHISPER_MODEL || saved.model || 'small';
@@ -31,7 +33,7 @@ export function createLocalTranscriber({ root = projectRoot, spawnImpl = spawn, 
     return {
       model,
       modelPath: join(local, 'models', model),
-      python: process.env.LOCAL_WHISPER_PYTHON ? resolve(process.env.LOCAL_WHISPER_PYTHON) : join(local, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
+      python: pythonPath(),
     };
   }
 
@@ -99,6 +101,21 @@ export function createLocalTranscriber({ root = projectRoot, spawnImpl = spawn, 
     });
   }
 
+  async function mp3Status() {
+    try {
+      const python = pythonPath();
+      await access(python, constants.X_OK);
+      await runPython({
+        python, args: [join(projectRoot, 'server', 'mp3_local.py'), '--check'], limit: 10000,
+        timeoutMessage: 'Local MP3 setup check timed out.', tooLarge: 'Local MP3 setup check returned too much data.',
+        failure: () => 'Local MP3 conversion is not available.',
+      });
+      return { mp3Available: true, mp3Message: 'MP4 to MP3 · on this computer · CPU' };
+    } catch {
+      return { mp3Available: false, mp3Message: 'Run pnpm setup:local to install the local Python/PyAV runtime. There is no cloud fallback.' };
+    }
+  }
+
   async function withTemporaryDirectory(run) {
     const tempRoot = join(local, 'tmp');
     await mkdir(tempRoot, { recursive: true, mode: 0o700 });
@@ -159,5 +176,27 @@ export function createLocalTranscriber({ root = projectRoot, spawnImpl = spawn, 
       return { buffer: mp3, duration: result.duration };
     });
   }
-  return { status, minusOneStatus, transcribe, separate };
+  async function convertMp3({ buffer, signal }) {
+    signal?.throwIfAborted();
+    const python = pythonPath();
+    return withTemporaryDirectory(async (temporary) => {
+      const inputPath = join(temporary, 'input.mp4');
+      const outputPath = join(temporary, 'output.mp3');
+      await writeFile(inputPath, buffer, { mode: 0o600 });
+      signal?.throwIfAborted();
+      await runPython({
+        python, args: [join(projectRoot, 'server', 'mp3_local.py'), '--input', inputPath, '--output', outputPath],
+        signal, limit: separationTimeout,
+        timeoutMessage: 'Local MP3 conversion took too long. Try a shorter file.',
+        tooLarge: 'The local MP3 conversion result was too large.',
+        failure: (stderr) => /no audio/i.test(stderr) ? 'Local MP3 conversion could not find an audio track in this MP4.'
+          : /invalid mp4|invaliddata|decode/i.test(stderr) ? 'Local MP3 conversion could not read this MP4 file.'
+          : 'Local MP3 conversion failed. Check the local Python/PyAV installation and try again.',
+      });
+      const mp3 = await readFile(outputPath).catch(() => undefined);
+      if (!mp3?.length) throw new Error('The local worker returned an empty MP3.');
+      return { buffer: mp3 };
+    });
+  }
+  return { status, minusOneStatus, mp3Status, transcribe, separate, convertMp3 };
 }

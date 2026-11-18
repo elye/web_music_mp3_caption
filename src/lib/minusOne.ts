@@ -8,9 +8,10 @@ export async function generateMinusOne(track: Track, signal: AbortSignal): Promi
   if (!['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname)) {
     throw new Error('Minus-one generation must run from localhost on your computer. Start Chorus locally, then open http://127.0.0.1:3001.');
   }
-  if (track.duration > MAX_MINUS_ONE_SECONDS) throw new Error('Minus-one generation supports songs up to 15 minutes.');
+  if ((track.videoDuration ?? track.duration) > MAX_MINUS_ONE_SECONDS) throw new Error('Minus-one generation supports songs up to 15 minutes.');
   const body = new FormData();
-  body.append('audio', track.file, track.filename);
+  const source = track.video ?? track.file;
+  body.append('audio', track.video ? new Blob([source], { type: 'video/mp4' }) : source, track.videoFilename ?? track.filename);
   const response = await fetch('/api/minus-one', { method: 'POST', body, signal });
   if (!response.ok) {
     const result = await response.json().catch(() => ({ error: 'The localhost helper returned an unexpected response.' }));

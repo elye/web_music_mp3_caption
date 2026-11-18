@@ -27,12 +27,12 @@ export async function transcribeTrack(
   if (!['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname)) {
     throw new Error('Local transcription must run from localhost on your computer. Start Chorus locally, then open http://127.0.0.1:3001.');
   }
-  if (track.duration > 20 * 60) throw new Error('Automatic transcription currently supports songs up to 20 minutes. Import timed lyrics for longer audio.');
+  if ((track.videoDuration ?? track.duration) > 20 * 60) throw new Error('Automatic transcription currently supports songs up to 20 minutes. Import timed lyrics for longer audio.');
   onProgress('Preparing audio on this device…');
   const context = new AudioContext({ sampleRate: 16000 });
   let decoded: AudioBuffer;
   try {
-    decoded = await context.decodeAudioData(await track.file.arrayBuffer());
+    decoded = await context.decodeAudioData(await (track.video ?? track.file).arrayBuffer());
   } finally { await context.close(); }
   signal.throwIfAborted();
   const mono = new Float32Array(decoded.length);

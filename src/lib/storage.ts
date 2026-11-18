@@ -79,6 +79,9 @@ export function readPreferences(): Preferences {
       repeatMode: value.repeatMode === 'song' ? 'song' : 'queue',
       highContrast: value.highContrast === true,
       minusOne: value.minusOne === true,
+      showVideo: value.showVideo !== false,
+      showVideoCaptions: value.showVideoCaptions !== false,
+      videoDim: clamp(value.videoDim, 0, 1, DEFAULT_PREFERENCES.videoDim),
     };
   } catch { return DEFAULT_PREFERENCES; }
 }

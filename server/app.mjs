@@ -4,7 +4,7 @@ import { createLocalTranscriber } from './local-transcriber.mjs';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 24 * 1024 * 1024, files: 1, fields: 1 } });
 const songUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024, files: 1, fields: 0 } });
-const isAudio = (file) => file && file.size > 0 && /^(audio\/|video\/webm$|application\/octet-stream$)/.test(file.mimetype);
+const isAudio = (file) => file && file.size > 0 && /^(audio\/|video\/(webm|mp4)$|application\/octet-stream$)/.test(file.mimetype);
 const pcmWav = (file) => file && /^audio\/(wav|x-wav|wave)$/.test(file.mimetype)
   && file.buffer.length >= 44 && file.buffer.toString('ascii', 0, 4) === 'RIFF'
   && file.buffer.toString('ascii', 8, 12) === 'WAVE';
@@ -25,6 +25,7 @@ export function createApp({ transcriber = createLocalTranscriber(), port = Numbe
   app.get('/api/status', async (_req, res) => res.json({
     ...await transcriber.status(),
     ...(await transcriber.minusOneStatus?.() ?? { minusOneAvailable: false }),
+    ...(await transcriber.mp3Status?.() ?? { mp3Available: false }),
     busy,
   }));
   app.post('/api/transcribe', async (req, res) => {
@@ -83,6 +84,37 @@ export function createApp({ transcriber = createLocalTranscriber(), port = Numbe
       if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Songs must be under 100 MB.' : 'The local audio transfer could not be read.' });
       return res.status(500).json({ error: /^(The local|Local vocal|Could not start)/.test(error.message ?? '')
         ? error.message : 'Local vocal removal failed. Check the installation and try again.' });
+    } finally {
+      busy = false;
+      res.removeListener('close', onClose);
+    }
+  });
+  app.post('/api/mp3', async (req, res) => {
+    if (!(await transcriber.mp3Status?.())?.mp3Available || !transcriber.convertMp3) {
+      return res.status(503).json({ error: 'Local MP3 conversion is not ready. Run pnpm setup:local to install Python and PyAV with MP3 encoding. No cloud service is used.' });
+    }
+    if (req.destroyed || res.destroyed) return;
+    if (busy) return res.status(429).json({ error: 'This computer is already processing a song. Wait for it to finish or stop it first.' });
+    busy = true;
+    const controller = new AbortController();
+    const onClose = () => { if (!res.writableEnded) controller.abort(); };
+    res.once('close', onClose);
+    try {
+      await new Promise((resolve, reject) => songUpload.single('audio')(req, res, (error) => error ? reject(error) : resolve()));
+      if (!req.file?.size || !/^(video\/mp4|audio\/mp4|application\/octet-stream)$/.test(req.file.mimetype)) {
+        return res.status(400).json({ error: 'Provide an MP4 file from the local app.' });
+      }
+      controller.signal.throwIfAborted();
+      const result = await transcriber.convertMp3({ buffer: req.file.buffer, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', result.buffer.length);
+      return res.end(result.buffer);
+    } catch (error) {
+      if (res.destroyed || controller.signal.aborted) return;
+      if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Files must be under 100 MB.' : 'The local MP4 transfer could not be read.' });
+      return res.status(500).json({ error: /^(The local|Local MP3|Could not start)/.test(error.message ?? '')
+        ? error.message : 'Local MP3 conversion failed. Check the local installation and try again.' });
     } finally {
       busy = false;
       res.removeListener('close', onClose);

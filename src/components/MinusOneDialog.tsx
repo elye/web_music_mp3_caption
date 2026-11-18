@@ -54,7 +54,7 @@ export function MinusOneDialog({ tracks, onSave, onClose }: {
       onSave(track.id, file);
       setCompleted((current) => current.includes(track.id) ? current : [...current, track.id]);
       setWarnings((current) => warning ? { ...current, [track.id]: warning } : (({ [track.id]: _removed, ...rest }) => rest)(current));
-      setMessage('Saved your minus-one. Use the Original / Minus-one switch in the player to compare.');
+      setMessage('Saved your minus-one. Use the playback version dropdown in the player to compare.');
     } catch (error) {
       setFailures((current) => ({ ...current, [track.id]: `${file.name}: ${error instanceof Error ? error.message : 'could not be used.'}` }));
     }
@@ -83,7 +83,7 @@ export function MinusOneDialog({ tracks, onSave, onClose }: {
     } finally {
       setCurrentId(null);
       setRunning(false);
-      setMessage(controller.signal.aborted ? 'Stopped. Completed songs have been saved.' : 'Finished. Use the Original / Minus-one switch in the player to compare.');
+      setMessage(controller.signal.aborted ? 'Stopped. Completed songs have been saved.' : 'Finished. Use the playback version dropdown in the player to compare.');
     }
   }
 
@@ -93,9 +93,10 @@ export function MinusOneDialog({ tracks, onSave, onClose }: {
       : !available ? <div className="setup-note"><strong>{status === null ? 'Local helper unavailable' : 'One-time local setup needed'}</strong><p>{status === null ? 'Run pnpm dev (or pnpm start after building) on this computer to start the localhost helper.' : 'Run pnpm setup:local to install the vocal remover once (a large download, mostly PyTorch). After that, it works offline.'}</p><button className="button secondary small" onClick={() => void refreshStatus()}>Check again</button></div>
       : <div className="local-model-status"><span><Check size={15} /> Demucs htdemucs · CPU · offline-ready</span>{status?.busy && <p>This computer is finishing another job. <button className="text-button" onClick={() => void refreshStatus()}>Check again</button></p>}</div>}
     <div className="transcription-tracks">{tracks.map((track) => <div className="transcription-track" key={track.id}>{completed.includes(track.id) ? <Check size={17} className="success" /> : currentId === track.id ? <LoaderCircle size={17} className="spin" /> : <AudioLines size={17} />}<div><strong>{track.title}</strong>
+      {track.video && <small>Source: {track.videoFilename ?? 'MP4 video'}</small>}
       {currentId === track.id && <small>Working · {formatTime(elapsed)}</small>}
       {track.minusOne && !completed.includes(track.id) && currentId !== track.id && <small>The existing minus-one will be replaced after success.</small>}
-      {track.duration > MAX_MINUS_ONE_SECONDS && <p className="inline-error">Longer than 15 minutes; this song will be skipped with an error.</p>}
+      {(track.videoDuration ?? track.duration) > MAX_MINUS_ONE_SECONDS && <p className="inline-error">Longer than 15 minutes; this song will be skipped with an error.</p>}
       {failures[track.id] && <p className="inline-error">{failures[track.id]}</p>}
       {warnings[track.id] && <p className="field-hint">{warnings[track.id]}</p>}
       {!running && tracks.length > 1 && <button className="text-button" onClick={() => { uploadTarget.current = track; uploadInput.current?.click(); }}><Upload size={14} />{track.minusOne || completed.includes(track.id) ? 'Upload a different one' : 'Upload your own'}</button>}</div></div>)}</div>

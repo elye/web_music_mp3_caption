@@ -1,0 +1,33 @@
+.video-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.video-backdrop__video,
+.video-backdrop__dim {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.video-backdrop__video {
+  object-fit: cover;
+  transition: filter 300ms ease, transform 300ms ease;
+}
+
+.video-backdrop__video--blurred {
+  transform: scale(1.04);
+}
+
+.video-backdrop__dim {
+  background: #000;
+  transition: opacity 700ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .video-backdrop__video, .video-backdrop__dim { transition: none; }
+}
