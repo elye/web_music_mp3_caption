@@ -102,8 +102,12 @@ function App() {
   const lyricWin = active ? lyricWindow(active.lyrics, time, active.offset, lyricLead) : null;
   const lyricMs = active && lyricWin ? lyricTransitionMs(active.lyrics, lyricWin, time, active.offset, lyricLead) : 700;
   const hasLyrics = Boolean(active?.lyrics.some((line) => line.text));
+  const wantsMinusOne = active?.useMinusOne ?? preferences.minusOne;
+  const showVideo = active?.showVideo ?? preferences.showVideo;
+  const showVideoCaptions = active?.showVideoCaptions ?? preferences.showVideoCaptions;
+  const videoDim = active?.videoDim ?? preferences.videoDim;
   // The version actually audible: the minus-one only exists for songs it has been generated for.
-  const usingMinusOne = Boolean(active?.minusOne && preferences.minusOne);
+  const usingMinusOne = Boolean(active?.minusOne && wantsMinusOne);
   const pitchReady = Boolean(active) && engine.pitchSupported;
   const shiftedKey = active?.key ? transposeKey(active.key, activePitch) : undefined;
   const guessedKey = Boolean(active?.key && active.key.confidence < CONFIDENT_KEY);
@@ -111,8 +115,8 @@ function App() {
     ? `Detected ${formatKey(active.key)}${active.key.confidence < CONFIDENT_KEY ? ' (a guess)' : ''}. Tuning applies to this song only.`
     : 'Working out the key… tuning still works.';
   const isPresenting = fullscreen || stageOnly;
-  const showingVideo = Boolean(active?.video && preferences.showVideo && !gap && !finished);
-  const videoOnly = showingVideo && (!preferences.showVideoCaptions || !hasLyrics);
+  const showingVideo = Boolean(active?.video && showVideo && !gap && !finished);
+  const videoOnly = showingVideo && (!showVideoCaptions || !hasLyrics);
   // What the stage is showing; when this changes the content fades out and the new content fades in.
   const stageView = !active ? 'welcome' : gap ? 'gap' : finished ? 'finished' : videoOnly ? `video:${active.id}` : !hasLyrics ? `bare:${active.id}` : `lyrics:${active.id}`;
   const modalOpen = settingsOpen || editing || Boolean(transcribeIds) || Boolean(minusOneIds) || downloadOpen || Boolean(removeId);
@@ -128,8 +132,9 @@ function App() {
   const chooseVersion = useCallback((minusOne: boolean) => {
     if (!active) return;
     if (minusOne && !active.minusOne) { setMinusOneIds([active.id]); return; }
-    setPreferences((value) => ({ ...value, minusOne }));
-  }, [active]);
+    engine.setMinusOne(minusOne);
+    updateTrackSettings(active.id, { useMinusOne: minusOne });
+  }, [active, engine]);
 
   const play = useCallback(() => {
     void engine.play().catch((error: unknown) => {
@@ -141,10 +146,12 @@ function App() {
   const selectTrack = useCallback((track: Track, autoplay = false) => {
     cancelGap();
     setFinished(false);
-    setActiveId(track.id);
-    engine.load(track);
+    const selected = tracksRef.current.find((item) => item.id === track.id) ?? track;
+    setActiveId(selected.id);
+    engine.setMinusOne(selected.useMinusOne ?? preferences.minusOne);
+    engine.load(selected);
     if (autoplay) play();
-  }, [cancelGap, engine, play]);
+  }, [cancelGap, engine, play, preferences.minusOne]);
 
   useEffect(() => {
     let live = true;
@@ -160,7 +167,6 @@ function App() {
   useEffect(() => {
     engine.fadeSeconds = preferences.fade;
     engine.setVolume(preferences.volume);
-    engine.setMinusOne(preferences.minusOne);
     try { storePreferences(preferences); } catch { /* Audio remains usable when browser storage is blocked. */ }
   }, [engine, preferences]);
   useEffect(() => { engine.setSoftened(softened); }, [engine, softened]);
@@ -323,8 +329,14 @@ function App() {
   }, [active, actualDuration, cancelGap, chooseVersion, engine, modalOpen, time, toggleFullscreen, togglePlayback, usingMinusOne]);
 
   function updateTrack(updated: Track) {
+    tracksRef.current = tracksRef.current.map((track) => track.id === updated.id ? updated : track);
     setTracks((current) => current.map((track) => track.id === updated.id ? updated : track));
     void storeTrack(updated).catch(storageError);
+  }
+
+  function updateTrackSettings(id: string, settings: Pick<Track, 'useMinusOne' | 'showVideo' | 'showVideoCaptions' | 'videoDim'>) {
+    const track = tracksRef.current.find((item) => item.id === id);
+    if (track) updateTrack({ ...track, ...settings });
   }
 
   function setAllQueued(inQueue: boolean) {
@@ -535,7 +547,7 @@ function App() {
       <section className="main-panel" aria-label="Sing-along stage">
         <div className="section-heading"><div><span className="eyebrow">LESS FUSS. MORE VOICES.</span><h2>Make room for the music.</h2></div><button className="button secondary fullscreen-button" onClick={() => void toggleFullscreen()}><Maximize size={16} /> Fullscreen <kbd>F</kbd></button></div>
         <section className={`lyric-stage ${active ? 'has-song' : ''}`} aria-label="Lyrics" style={{ '--lyric-size': `${preferences.fontSize}px` } as CSSProperties}>
-          {active?.video && <VideoBackdrop video={active.video} audio={engine.audio} visible={showingVideo} dim={preferences.showVideoCaptions && hasLyrics ? preferences.videoDim : 0} />}
+          {active?.video && <VideoBackdrop video={active.video} audio={engine.audio} visible={showingVideo} dim={showVideoCaptions && hasLyrics ? videoDim : 0} />}
           <div className="stage-grain" aria-hidden="true" />
           <div className="stage-topline"><span className="stage-label"><span className={playing && !fading ? 'live-dot live' : 'live-dot'} />{gap ? 'UP NEXT' : !active ? 'THE STAGE IS YOURS' : fading ? 'FADING TO PAUSE' : playing ? 'NOW SINGING' : 'READY WHEN YOU ARE'}</span><div className="stage-top-actions">{active && <span className="stage-song-number">{String(activeIndex + 1).padStart(2, '0')} / {String(tracks.length).padStart(2, '0')}</span>}{isPresenting && <button className="icon-button light" aria-label="Exit fullscreen" onClick={() => void toggleFullscreen()}><Minimize size={20} /></button>}</div></div>
           <FadeThrough viewKey={stageView}>
@@ -550,14 +562,6 @@ function App() {
               {nextLine && <span className="lyrics-count-in">Words in {Math.max(1, Math.ceil(nextLine.start + active.offset - time))}s</span>}
             </>} />}
           </FadeThrough>
-          {active?.video && <div className="video-controls" role="group" aria-label="Video display">
-            <button type="button" aria-pressed={preferences.showVideo} onClick={() => setPreferences((value) => ({ ...value, showVideo: !value.showVideo }))}>Video {preferences.showVideo ? 'on' : 'off'}</button>
-            {preferences.showVideo && <>
-              <button type="button" aria-pressed={preferences.showVideoCaptions} onClick={() => setPreferences((value) => ({ ...value, showVideoCaptions: !value.showVideoCaptions }))}>Captions {preferences.showVideoCaptions ? 'on' : 'off'}</button>
-              {preferences.showVideoCaptions && <><label>Dim <input type="range" aria-label="Video dim" min={0} max={1} step={0.05} value={preferences.videoDim} onChange={(event) => setPreferences((value) => ({ ...value, videoDim: Number(event.target.value) }))} /> {Math.round(preferences.videoDim * 100)}%</label>
-                <span role="group" aria-label="Video dim presets">{[0, 0.5, 0.8].map((amount) => <button type="button" key={amount} aria-pressed={preferences.videoDim === amount} onClick={() => setPreferences((value) => ({ ...value, videoDim: amount }))}>{Math.round(amount * 100)}%</button>)}</span></>}
-            </>}
-          </div>}
           <div className="stage-bottomline"><span>{active ? <><Music2 size={13} /> {active.title}{usingMinusOne && <span className="stage-version">Minus-one</span>}</> : <><Waves size={15} /> A space for every voice</>}</span><div className="stage-caption-tools"><button aria-label="Smaller lyrics" disabled={preferences.fontSize <= 32} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.max(32, value.fontSize - 4) }))}>A<span>−</span></button><span className="caption-tool-divider" /><button aria-label="Larger lyrics" disabled={preferences.fontSize >= 88} onClick={() => setPreferences((value) => ({ ...value, fontSize: Math.min(88, value.fontSize + 4) }))}>A<span>+</span></button></div></div>
         </section>
         <div className="under-stage"><div className="stage-note"><span className="note-dot" /><span>{hasLyrics ? `${active?.lyrics.filter((line) => line.text).length} lines · ${active?.lyricSource === 'transcribed' ? 'AI lyrics — please review' : 'Timed lyrics ready'}` : 'Big words. Shared moments. No page-turning.'}</span></div><div className="lyric-actions">{active && showingVideo && !hasLyrics && <button className="text-button" onClick={() => setTranscribeIds([active.id])}><Sparkles size={14} />Generate lyrics</button>}{active && <button className="text-button" onClick={() => videoInput.current?.click()}>{active.video ? 'Replace video' : 'Attach MP4'}</button>}{active?.video && <button className="text-button" onClick={() => { updateTrack({ ...active, video: undefined, videoFilename: undefined, videoDuration: undefined }); notify('Video removed from this song. Original files are unchanged.'); }}>Remove video</button>}{active && hasLyrics && <div className="offset-controls"><span>Lyric delay</span><button aria-label="Show lyrics 0.5 seconds earlier" onClick={() => updateTrack({ ...active, offset: Math.max(-30, Math.round((active.offset - 0.5) * 10) / 10) })}>−</button><span className="mono" title="Positive values show lyrics later">{active.offset > 0 ? '+' : ''}{active.offset.toFixed(1)}s</span><button aria-label="Show lyrics 0.5 seconds later" onClick={() => updateTrack({ ...active, offset: Math.min(30, Math.round((active.offset + 0.5) * 10) / 10) })}>+</button></div>}{active && <button className="text-button" onClick={() => setDownloadOpen(true)}><Download size={14} />Download</button>}{active && <button className="text-button" onClick={() => setEditing(true)}><FileText size={14} />{hasLyrics ? 'Edit lyrics' : 'Add lyrics'}</button>}</div></div>
@@ -576,6 +580,13 @@ function App() {
           {activePitch !== 0 && <button className="tuner-reset" aria-label="Reset to original key" title="Reset to original key" onClick={() => setPitch(0)}><RotateCcw size={11} /></button>}
         </div></div>}</div></div>
       <div className="transport"><div className="transport-buttons"><span className="repeat-group"><span className={`repeat-scope ${preferences.repeat ? 'visible' : ''}`} role="group" aria-label="Repeat scope"><button aria-pressed={!repeatSong} title="Repeat the whole queue" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'queue' }))}>Queue</button><button aria-pressed={repeatSong} title="Repeat this song" onClick={() => setPreferences((value) => ({ ...value, repeatMode: 'song' }))}>Song</button></span><button className={`icon-button repeat-button ${preferences.repeat ? 'enabled' : ''}`} aria-label="Repeat" aria-pressed={preferences.repeat} title={!preferences.repeat ? 'Repeat is off' : repeatSong ? 'Repeating this song' : 'Repeating the whole queue'} onClick={() => setPreferences((value) => ({ ...value, repeat: !value.repeat }))}><span className="repeat-icon"><Repeat2 size={18} /></span></button></span><button className="icon-button" aria-label="Previous song or restart" disabled={!active} onClick={previousTrack}><SkipBack size={21} fill="currentColor" /></button><button className={`play-button ${fading ? 'fading' : ''}`} aria-label={gap ? 'Pause auto-advance' : playing && !fading ? 'Pause with fade' : 'Play'} disabled={!active} onClick={togglePlayback}>{gap || (playing && !fading) ? <Pause size={23} fill="currentColor" /> : <Play size={24} fill="currentColor" />}</button><button className="icon-button" aria-label="Next song" disabled={!active || !hasNextQueued} onClick={nextTrack}><SkipForward size={21} fill="currentColor" /></button><span className="transport-spacer" /></div><div className="seek-row"><span>{formatTime(time)}</span><input type="range" aria-label="Song position" aria-valuetext={`${formatTime(time)} of ${formatTime(actualDuration)}`} min={0} max={actualDuration || 1} step={0.1} value={Math.min(time, actualDuration || 1)} disabled={!active || !duration} style={{ '--progress': `${actualDuration ? time / actualDuration * 100 : 0}%` } as CSSProperties} onChange={(event) => { cancelGap(); setFinished(false); engine.seek(Number(event.target.value)); }} /><span>{formatTime(actualDuration)}</span></div></div>
+      {active?.video && <div className="video-controls" role="group" aria-label="Video display">
+        <button type="button" aria-pressed={showVideo} onClick={() => updateTrackSettings(active.id, { showVideo: !showVideo })}>Video {showVideo ? 'on' : 'off'}</button>
+        {showVideo && <>
+          <button type="button" aria-pressed={showVideoCaptions} onClick={() => updateTrackSettings(active.id, { showVideoCaptions: !showVideoCaptions })}>Captions {showVideoCaptions ? 'on' : 'off'}</button>
+          {showVideoCaptions && <label>Dim <input type="range" aria-label="Video dim" aria-valuetext={`${Math.round(videoDim * 100)} percent`} min={0} max={1} step={0.05} value={videoDim} style={{ '--progress': `${videoDim * 100}%` } as CSSProperties} onChange={(event) => updateTrackSettings(active.id, { videoDim: Number(event.target.value) })} /> {Math.round(videoDim * 100)}%</label>}
+        </>}
+      </div>}
       <div className="volume-controls"><button className={`soften-button ${softened ? 'softened' : ''}`} disabled={!active} aria-pressed={softened} title="Gently lower music to 22% · M" onClick={() => setSoftened((value) => !value)}><Waves size={17} /><span>{softened ? 'Restore' : 'Soften'}</span></button><div className="volume-slider">{preferences.volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}<input type="range" min={0} max={1} step={0.01} value={preferences.volume} aria-label="Volume" aria-valuetext={`${Math.round(preferences.volume * 100)} percent`} style={{ '--progress': `${preferences.volume * 100}%` } as CSSProperties} onChange={(event) => setPreferences((value) => ({ ...value, volume: Number(event.target.value) }))} /></div></div>
     </footer>
     <div className="page-footer"><span>MADE FOR THE MOMENTS BETWEEN US</span><span>{tracks.length ? `${readyLyrics} of ${tracks.length} songs with lyrics` : 'No account. Just your music.'}<span className="footer-divider">/</span><kbd>Space</kbd> to play or pause</span></div>

@@ -20,4 +20,9 @@
 
 .video-backdrop__dim {
   background: #000;
+  transition: opacity 700ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .video-backdrop__dim { transition: none; }
 }

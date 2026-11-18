@@ -669,7 +669,7 @@ test('MP4 import plays synchronized video with persistent caption and dim contro
   await expect(page.locator('.current-lyric')).toHaveCount(0);
   await expect(page.locator('.video-backdrop__dim')).toHaveCSS('opacity', '0');
   await page.getByRole('button', { name: 'Captions off' }).click();
-  await page.getByRole('button', { name: '80%', exact: true }).click();
+  await page.getByRole('slider', { name: 'Video dim' }).fill('0.8');
   await expect(page.locator('.video-backdrop__dim')).toHaveCSS('opacity', '0.8');
   await page.getByRole('button', { name: 'Video on' }).click();
   await expect(page.locator('.video-backdrop__video')).not.toBeVisible();
@@ -684,6 +684,112 @@ test('MP4 import plays synchronized video with persistent caption and dim contro
   await expect(page.locator('.video-backdrop__dim')).toHaveCSS('opacity', '0.8');
   await expect(page.locator('.video-backdrop__video')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+});
+
+test('video, captions, dim and playback version are saved independently per song', async ({ page }) => {
+  const mp4 = makeMp4();
+  test.skip(!mp4, 'ffmpeg with H.264 and AAC encoders is needed for this video test');
+  await page.route('**/api/status', (route) => route.fulfill({ json: { transcriptionAvailable: false, minusOneAvailable: true } }));
+  await page.route('**/api/minus-one', (route) => route.fulfill({ body: wav(), contentType: 'audio/wav' }));
+  await instrumentAudio(page);
+  await page.goto('/');
+  await page.locator('input[type=file]').first().setInputFiles([
+    { name: 'First video.mp4', mimeType: 'video/mp4', buffer: mp4! },
+    { name: 'Second video.mp4', mimeType: 'video/mp4', buffer: mp4! },
+  ]);
+  await expect(page.locator('.track-row')).toHaveCount(2);
+  await page.locator('.queue-bottom').getByRole('button', { name: 'Make minus-one' }).click();
+  await page.getByRole('button', { name: 'Generate for 2 songs' }).click();
+  await expect(page.getByText(/^Finished\./)).toBeVisible();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByRole('button', { name: 'Video on' }).click();
+  await page.locator('.lyric-actions').getByRole('button', { name: 'Add lyrics' }).click();
+  await page.getByLabel('Timed lyrics').fill('[00:00.00]First song words');
+  await page.getByRole('button', { name: 'Save lyrics' }).click();
+  await page.getByRole('button', { name: 'Video off' }).click();
+  await page.getByRole('slider', { name: 'Video dim' }).fill('0.8');
+  await expect(page.locator('.video-backdrop__dim')).toHaveCSS('opacity', '0.8');
+  const controls = page.getByRole('group', { name: 'Video display' });
+  await expect(page.getByRole('region', { name: 'Lyrics' }).getByRole('group', { name: 'Video display' })).toHaveCount(0);
+  await expect(page.getByRole('contentinfo', { name: 'Playback controls' }).getByRole('group', { name: 'Video display' })).toBeVisible();
+  await expect(controls.getByRole('button', { name: /^(0|50|80)%$/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Captions on' }).click();
+  await page.waitForTimeout(120);
+  const duringFade = await page.locator('.video-backdrop__dim').evaluate((element) => Number(getComputedStyle(element).opacity));
+  expect(duringFade).toBeGreaterThan(0);
+  expect(duringFade).toBeLessThan(0.8);
+  await page.getByRole('button', { name: 'Captions off' }).click();
+  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await page.getByRole('button', { name: 'Select Second video' }).click();
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('slider', { name: 'Video dim' }).fill('0.2');
+  await page.getByRole('button', { name: 'Captions on' }).click();
+  await page.getByRole('button', { name: 'Video on' }).click();
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await page.getByRole('button', { name: 'Select First video' }).click();
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { testGains: GainNode[] }).testGains.slice(0, 2).map((node) => Math.round(node.gain.value)))).toEqual([0, 1]);
+  await expect(page.getByRole('slider', { name: 'Video dim' })).toHaveValue('0.8');
+  await page.getByRole('button', { name: 'Select Second video' }).click();
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { testGains: GainNode[] }).testGains.slice(0, 2).map((node) => Math.round(node.gain.value)))).toEqual([1, 0]);
+  await expect(page.getByRole('button', { name: 'Video off' })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('slider', { name: 'Video dim' })).toHaveValue('0.8');
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Select Second video' }).click();
+  await expect(page.getByRole('button', { name: 'Video off' })).toBeVisible();
+  await page.getByRole('button', { name: 'Video off' }).click();
+  await expect(page.getByRole('button', { name: 'Captions off' })).toBeVisible();
+  await page.getByRole('button', { name: 'Captions off' }).click();
+  await expect(page.getByRole('slider', { name: 'Video dim' })).toHaveValue('0.2');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(controls).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Fullscreen' }).click();
+  await expect(controls).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(page.locator('.video-backdrop__dim')).toHaveCSS('transition-duration', '0s');
+});
+
+test('legacy preferences remain defaults and queue autoplay uses the next song version', async ({ page }) => {
+  const mp4 = makeMp4();
+  test.skip(!mp4, 'ffmpeg with H.264 and AAC encoders is needed for this video test');
+  await page.addInitScript(() => {
+    if (!localStorage.getItem('chorus-preferences')) localStorage.setItem('chorus-preferences', JSON.stringify({ gap: 0, minusOne: true, showVideo: false, showVideoCaptions: false, videoDim: 0.65 }));
+  });
+  await page.route('**/api/status', (route) => route.fulfill({ json: { minusOneAvailable: true } }));
+  await page.route('**/api/minus-one', (route) => route.fulfill({ body: wav(), contentType: 'audio/wav' }));
+  await instrumentAudio(page);
+  await page.goto('/');
+  await page.locator('input[type=file]').first().setInputFiles([
+    { name: 'Legacy first.mp4', mimeType: 'video/mp4', buffer: mp4! },
+    { name: 'Legacy second.mp4', mimeType: 'video/mp4', buffer: mp4! },
+  ]);
+  await expect(page.locator('.track-row')).toHaveCount(2);
+  await page.locator('.queue-bottom').getByRole('button', { name: 'Make minus-one' }).click();
+  await page.getByRole('button', { name: 'Generate for 2 songs' }).click();
+  await expect(page.getByText(/^Finished\./)).toBeVisible();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.version-toggle').getByRole('button', { name: 'Original' }).click();
+  await page.getByRole('button', { name: 'Video off' }).click();
+  await expect(page.getByRole('button', { name: 'Captions off' })).toBeVisible();
+  await page.getByRole('button', { name: 'Captions off' }).click();
+  await expect(page.getByRole('slider', { name: 'Video dim' })).toHaveValue('0.65');
+  await page.getByRole('slider', { name: 'Video dim' }).fill('0.3');
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect.poll(() => audioPaused(page)).toBe(false);
+  await page.evaluate(() => (window as unknown as { testElements: HTMLMediaElement[] }).testElements.filter((element) => element instanceof HTMLAudioElement).at(-1)!.dispatchEvent(new Event('ended')));
+  await expect(page.getByRole('button', { name: 'Select Legacy second' })).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { testGains: GainNode[] }).testGains.slice(0, 2).map((node) => Math.round(node.gain.value)))).toEqual([0, 1]);
+  await expect(page.getByRole('button', { name: 'Video off' })).toBeVisible();
+  await page.getByRole('button', { name: 'Video off' }).click();
+  await expect(page.getByRole('button', { name: 'Captions off' })).toBeVisible();
+  await page.getByRole('button', { name: 'Captions off' }).click();
+  await expect(page.getByRole('slider', { name: 'Video dim' })).toHaveValue('0.65');
 });
 
 test('attached MP4 supplies audio for local generation and can be downloaded as MP3', async ({ page }) => {

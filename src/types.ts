@@ -22,6 +22,11 @@ export interface Track {
   video?: Blob;
   videoFilename?: string;
   videoDuration?: number;
+  /** Per-song display and playback choices; absent values use legacy preferences. */
+  showVideo?: boolean;
+  showVideoCaptions?: boolean;
+  videoDim?: number;
+  useMinusOne?: boolean;
   /** Backing track with the vocals removed, generated locally. */
   minusOne?: Blob;
   /** Whether this song participates in automatic queue playback; absent means included. */
