@@ -284,7 +284,7 @@ test('makes a minus-one on request, switches versions mid-song, downloads both, 
   await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
   await importSongs(page, 12);
   expect(requests).toBe(0);
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('original');
   await page.locator('.queue-bottom').getByRole('button', { name: 'Make minus-one' }).click();
   await expect(page.getByText('On your computer. Not in the cloud.')).toBeVisible();
   expect(requests).toBe(0);
@@ -294,7 +294,7 @@ test('makes a minus-one on request, switches versions mid-song, downloads both, 
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   await expect(page.locator('.minus-one-badge')).toHaveCount(2);
   // Generating does not change what is playing.
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('original');
 
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await expect.poll(() => audioPaused(page)).toBe(false);
@@ -306,9 +306,9 @@ test('makes a minus-one on request, switches versions mid-song, downloads both, 
   expect(before.gains[1]).toBeCloseTo(0, 1);
   await page.evaluate(() => { (window as unknown as { testAudio: HTMLMediaElement }).testAudio.currentTime = 5; });
   await page.waitForTimeout(400);
-  const toMinusOne = page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' });
-  await toMinusOne.click();
-  await expect(toMinusOne).toHaveAttribute('aria-pressed', 'true');
+  const toMinusOne = page.getByRole('combobox', { name: 'Playback version' });
+  await toMinusOne.selectOption('minus-one');
+  await expect(toMinusOne).toHaveValue('minus-one');
   // A crossfade of gains only: same sources, nothing paused, and the timeline carries on.
   await expect.poll(async () => (await versions(page)).gains.map((gain) => Math.round(gain))).toEqual([0, 1]);
   const after = await versions(page);
@@ -317,15 +317,18 @@ test('makes a minus-one on request, switches versions mid-song, downloads both, 
   expect(after.elements[0]!.time).toBeGreaterThan(5);
   expect(Math.abs(after.elements[0]!.time - after.elements[1]!.time)).toBeLessThan(0.3);
   await expect(page.locator('.stage-version')).toHaveText('Minus-one');
-  // Shortcuts ignore focused buttons, as with the other keys.
+  // Shortcuts do not change the version while the dropdown has focus.
+  await toMinusOne.focus();
+  await page.keyboard.press('v');
+  await expect(toMinusOne).toHaveValue('minus-one');
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('v');
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('original');
   await expect.poll(async () => (await versions(page)).gains.map((gain) => Math.round(gain))).toEqual([1, 0]);
   expect((await versions(page)).elements.every((el) => !el!.paused)).toBe(true);
   // Seeking moves both, so the next switch lands in the right place.
   await page.keyboard.press('v');
-  await expect(toMinusOne).toHaveAttribute('aria-pressed', 'true');
+  await expect(toMinusOne).toHaveValue('minus-one');
   await page.getByRole('slider', { name: 'Song position' }).fill('2');
   await expect.poll(async () => { const v = await versions(page); return v.elements.every((el) => el!.time > 1.9 && el!.time < 3.5); }).toBe(true);
 
@@ -341,7 +344,7 @@ test('makes a minus-one on request, switches versions mid-song, downloads both, 
   await page.reload();
   await expect(page.locator('.track-row')).toHaveCount(2);
   await expect(page.locator('.minus-one-badge')).toHaveCount(2);
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('minus-one');
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await expect.poll(() => audioPaused(page)).toBe(false);
 });
@@ -352,14 +355,15 @@ test('a failed minus-one keeps the original, and the switch offers to make one',
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
   await importSongs(page, 5);
-  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await page.getByRole('combobox', { name: 'Playback version' }).selectOption('minus-one');
   await page.getByRole('button', { name: 'Generate for this song' }).waitFor();
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('original');
   await expect(page.getByRole('button', { name: 'Generate for 2 songs' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Generate for this song' }).click();
   await expect(page.getByText('The local vocal remover failed.')).toBeVisible();
   await page.getByRole('button', { name: 'Not now' }).click();
   await expect(page.locator('.minus-one-badge')).toHaveCount(0);
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('original');
   await page.locator('.lyric-actions').getByRole('button', { name: 'Download' }).click();
   await expect(page.locator('.download-list li').filter({ hasText: 'Minus-one' }).getByRole('button', { name: 'Make minus-one' })).toBeVisible();
   await expect(page.locator('.download-list li').filter({ hasText: 'Lyrics' }).getByRole('button', { name: 'Download' })).toBeDisabled();
@@ -373,7 +377,7 @@ test('uploads your own minus-one without the helper, warns about length, and rej
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Add your first songs' })).toBeEnabled();
   await importSongs(page, 12);
-  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await page.getByRole('combobox', { name: 'Playback version' }).selectOption('minus-one');
   await expect(page.getByText('One-time local setup needed')).toBeVisible();
   const upload = {
     setInputFiles: async (file: { name: string; mimeType: string; buffer: Buffer }) => {
@@ -393,10 +397,10 @@ test('uploads your own minus-one without the helper, warns about length, and rej
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   expect(requests).toBe(0);
   await expect(page.locator('.minus-one-badge')).toHaveCount(1);
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('original');
 
   await page.getByRole('button', { name: 'Play', exact: true }).click();
-  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await page.getByRole('combobox', { name: 'Playback version' }).selectOption('minus-one');
   await expect.poll(async () => (await versions(page)).gains.map((gain) => Math.round(gain))).toEqual([0, 1]);
   await expect.poll(async () => (await versions(page)).elements.every((el) => el && !el.paused)).toBe(true);
 
@@ -712,6 +716,69 @@ test('video, captions, dim and playback version are saved independently per song
   const controls = page.getByRole('group', { name: 'Video display' });
   await expect(page.getByRole('region', { name: 'Lyrics' }).getByRole('group', { name: 'Video display' })).toHaveCount(0);
   await expect(page.getByRole('contentinfo', { name: 'Playback controls' }).getByRole('group', { name: 'Video display' })).toBeVisible();
+  const original = page.getByRole('combobox', { name: 'Playback version' });
+  const video = controls.getByRole('button', { name: 'Video on' });
+  const captions = controls.getByRole('button', { name: 'Captions on' });
+  const dim = page.getByRole('slider', { name: 'Video dim' });
+  const tuner = page.getByRole('group', { name: 'Tune this song' });
+  const soften = page.getByRole('button', { name: 'Soften' });
+  const checkControlColors = async () => {
+    await page.mouse.move(0, 0);
+    const colors = (node: Element) => {
+      const style = getComputedStyle(node);
+      return { color: style.color, background: style.backgroundColor, border: style.borderColor };
+    };
+    await expect.poll(async () => {
+      const [reference, selectStyle, videoStyle, captionsStyle, groupStyle] = await Promise.all(
+        [soften, original, video, captions, controls].map((control) => control.evaluate(colors)),
+      );
+      return [selectStyle, videoStyle, captionsStyle].every((style) => style.color === reference.color && style.background === reference.background)
+        && selectStyle.border === reference.border && groupStyle.border === reference.border;
+    }).toBe(true);
+  };
+  await checkControlColors();
+  await expect(page.locator('.player-extras').getByRole('group', { name: 'Tune this song' })).toBeVisible();
+  await expect(page.locator('.player-options').getByRole('slider', { name: 'Video dim' })).toBeVisible();
+  expect(await dim.evaluate((node) => node.closest('.video-dim')?.previousElementSibling?.contains(document.querySelector('[aria-label="Video display"]')))).toBe(true);
+  const checkToggleRow = async () => {
+    const [a, b, c] = await Promise.all([original.boundingBox(), video.boundingBox(), captions.boundingBox()]);
+    expect(a && b && c).toBeTruthy();
+    expect(Math.abs(a!.y + a!.height / 2 - b!.y - b!.height / 2)).toBeLessThan(1);
+    expect(Math.abs(a!.y + a!.height / 2 - c!.y - c!.height / 2)).toBeLessThan(1);
+    expect(c!.x + c!.width).toBeLessThanOrEqual(await page.evaluate(() => innerWidth));
+    const slider = await dim.boundingBox();
+    expect(slider).toBeTruthy();
+    expect(slider!.x + slider!.width).toBeLessThanOrEqual(await page.evaluate(() => innerWidth));
+    const [tunerBox, softenBox, transportBox] = await Promise.all([tuner.boundingBox(), soften.boundingBox(), page.locator('.transport').boundingBox()]);
+    expect(tunerBox && softenBox && transportBox).toBeTruthy();
+    expect(Math.abs(tunerBox!.y + tunerBox!.height / 2 - softenBox!.y - softenBox!.height / 2)).toBeLessThan(1);
+    expect(tunerBox!.x + tunerBox!.width).toBeLessThanOrEqual(softenBox!.x);
+    expect(softenBox!.x + softenBox!.width).toBeLessThanOrEqual(await page.evaluate(() => innerWidth));
+    const volume = page.getByRole('slider', { name: 'Volume' });
+    if (await page.evaluate(() => innerWidth) > 860) {
+      await expect(volume).toBeVisible();
+      const volumeBox = await volume.boundingBox();
+      expect(volumeBox).toBeTruthy();
+      expect(Math.abs(softenBox!.y + softenBox!.height / 2 - volumeBox!.y - volumeBox!.height / 2)).toBeLessThan(1);
+      expect(volumeBox!.x).toBeGreaterThanOrEqual(softenBox!.x + softenBox!.width);
+      expect(volumeBox!.x + volumeBox!.width).toBeLessThanOrEqual(await page.evaluate(() => innerWidth));
+    } else {
+      await expect(volume).toBeHidden();
+    }
+    expect(tunerBox!.x >= transportBox!.x + transportBox!.width || tunerBox!.y >= transportBox!.y + transportBox!.height || transportBox!.y >= tunerBox!.y + tunerBox!.height).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  };
+  await page.getByRole('button', { name: 'Raise by a semitone' }).click();
+  await expect(page.getByRole('button', { name: 'Reset to original key' })).toBeVisible();
+  for (const width of [2000, 1440, 1151, 1150, 1031, 1030, 931, 861, 860, 760, 680, 390, 360]) {
+    await page.setViewportSize({ width, height: 844 });
+    await checkToggleRow();
+    if (width >= 1440) {
+      const [captionBox, dimBox] = await Promise.all([captions.boundingBox(), dim.boundingBox()]);
+      expect(Math.abs(captionBox!.y + captionBox!.height / 2 - dimBox!.y - dimBox!.height / 2)).toBeLessThan(2);
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await expect(controls.getByRole('button', { name: /^(0|50|80)%$/ })).toHaveCount(0);
   await page.getByRole('button', { name: 'Captions on' }).click();
   await page.waitForTimeout(120);
@@ -719,24 +786,24 @@ test('video, captions, dim and playback version are saved independently per song
   expect(duringFade).toBeGreaterThan(0);
   expect(duringFade).toBeLessThan(0.8);
   await page.getByRole('button', { name: 'Captions off' }).click();
-  await page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' }).click();
+  await page.getByRole('combobox', { name: 'Playback version' }).selectOption('minus-one');
   await page.getByRole('button', { name: 'Select Second video' }).click();
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('original');
   await page.getByRole('slider', { name: 'Video dim' }).fill('0.2');
   await page.getByRole('button', { name: 'Captions on' }).click();
   await page.getByRole('button', { name: 'Video on' }).click();
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await page.getByRole('button', { name: 'Select First video' }).click();
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('minus-one');
   await expect.poll(() => page.evaluate(() => (window as unknown as { testGains: GainNode[] }).testGains.slice(0, 2).map((node) => Math.round(node.gain.value)))).toEqual([0, 1]);
   await expect(page.getByRole('slider', { name: 'Video dim' })).toHaveValue('0.8');
   await page.getByRole('button', { name: 'Select Second video' }).click();
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('original');
   await expect.poll(() => page.evaluate(() => (window as unknown as { testGains: GainNode[] }).testGains.slice(0, 2).map((node) => Math.round(node.gain.value)))).toEqual([1, 0]);
   await expect(page.getByRole('button', { name: 'Video off' })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('slider', { name: 'Video dim' })).toHaveValue('0.8');
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('minus-one');
   await page.getByRole('button', { name: 'Select Second video' }).click();
   await expect(page.getByRole('button', { name: 'Video off' })).toBeVisible();
   await page.getByRole('button', { name: 'Video off' }).click();
@@ -748,7 +815,10 @@ test('video, captions, dim and playback version are saved independently per song
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole('button', { name: 'Fullscreen' }).click();
   await expect(controls).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await checkControlColors();
+  await checkToggleRow();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await checkToggleRow();
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(page.locator('.video-backdrop__dim')).toHaveCSS('transition-duration', '0s');
 });
@@ -772,8 +842,8 @@ test('legacy preferences remain defaults and queue autoplay uses the next song v
   await page.getByRole('button', { name: 'Generate for 2 songs' }).click();
   await expect(page.getByText(/^Finished\./)).toBeVisible();
   await page.getByRole('button', { name: 'Done', exact: true }).click();
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
-  await page.locator('.version-toggle').getByRole('button', { name: 'Original' }).click();
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('minus-one');
+  await page.getByRole('combobox', { name: 'Playback version' }).selectOption('original');
   await page.getByRole('button', { name: 'Video off' }).click();
   await expect(page.getByRole('button', { name: 'Captions off' })).toBeVisible();
   await page.getByRole('button', { name: 'Captions off' }).click();
@@ -783,7 +853,7 @@ test('legacy preferences remain defaults and queue autoplay uses the next song v
   await expect.poll(() => audioPaused(page)).toBe(false);
   await page.evaluate(() => (window as unknown as { testElements: HTMLMediaElement[] }).testElements.filter((element) => element instanceof HTMLAudioElement).at(-1)!.dispatchEvent(new Event('ended')));
   await expect(page.getByRole('button', { name: 'Select Legacy second' })).toHaveAttribute('aria-current', 'true');
-  await expect(page.locator('.version-toggle').getByRole('button', { name: 'Minus-one' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('combobox', { name: 'Playback version' })).toHaveValue('minus-one');
   await expect.poll(() => page.evaluate(() => (window as unknown as { testGains: GainNode[] }).testGains.slice(0, 2).map((node) => Math.round(node.gain.value)))).toEqual([0, 1]);
   await expect(page.getByRole('button', { name: 'Video off' })).toBeVisible();
   await page.getByRole('button', { name: 'Video off' }).click();
@@ -819,9 +889,9 @@ test('attached MP4 supplies audio for local generation and can be downloaded as 
   expect(crossings).toBeGreaterThan(700); // The MP4 is 880 Hz; the original WAV is 440 Hz.
   await page.getByRole('button', { name: 'Done' }).click();
   await expect(page.locator('.current-lyric')).toHaveText('Generated line');
-  await page.getByRole('button', { name: 'Minus-one', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Playback version' }).selectOption('minus-one');
   await page.getByRole('button', { name: 'Generate for', exact: false }).click();
-  await expect(page.getByText('Finished. Use the Original / Minus-one switch in the player to compare.')).toBeVisible();
+  await expect(page.getByText('Finished. Use the playback version dropdown in the player to compare.')).toBeVisible();
   expect(minusBodies[0]?.includes(Buffer.from('attached.mp4'))).toBe(true);
   expect(minusBodies[0]?.includes(Buffer.from('video/mp4'))).toBe(true);
   await page.getByRole('button', { name: 'Done' }).click();

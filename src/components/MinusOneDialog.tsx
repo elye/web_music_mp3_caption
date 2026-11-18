@@ -54,7 +54,7 @@ export function MinusOneDialog({ tracks, onSave, onClose }: {
       onSave(track.id, file);
       setCompleted((current) => current.includes(track.id) ? current : [...current, track.id]);
       setWarnings((current) => warning ? { ...current, [track.id]: warning } : (({ [track.id]: _removed, ...rest }) => rest)(current));
-      setMessage('Saved your minus-one. Use the Original / Minus-one switch in the player to compare.');
+      setMessage('Saved your minus-one. Use the playback version dropdown in the player to compare.');
     } catch (error) {
       setFailures((current) => ({ ...current, [track.id]: `${file.name}: ${error instanceof Error ? error.message : 'could not be used.'}` }));
     }
@@ -83,7 +83,7 @@ export function MinusOneDialog({ tracks, onSave, onClose }: {
     } finally {
       setCurrentId(null);
       setRunning(false);
-      setMessage(controller.signal.aborted ? 'Stopped. Completed songs have been saved.' : 'Finished. Use the Original / Minus-one switch in the player to compare.');
+      setMessage(controller.signal.aborted ? 'Stopped. Completed songs have been saved.' : 'Finished. Use the playback version dropdown in the player to compare.');
     }
   }
 
