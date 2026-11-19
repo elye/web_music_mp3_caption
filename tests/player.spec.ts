@@ -100,10 +100,10 @@ test('imports a queue, edits lyrics, adjusts captions, drags songs to reorder, a
   await page.getByRole('button', { name: 'Select First song' }).click();
   await expect(page.locator('.current-lyric')).toHaveText('Here together, we belong');
   await page.screenshot({ path: 'test-results/screenshots/desktop-lyrics.png', fullPage: true });
-  await page.getByRole('button', { name: 'Remove First song' }).click({ force: true });
+  await page.getByRole('button', { name: 'Remove First song' }).click();
   await page.getByRole('button', { name: 'Keep song' }).click();
   await expect(page.locator('.track-row')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Remove First song' }).click({ force: true });
+  await page.getByRole('button', { name: 'Remove First song' }).click();
   await page.getByRole('button', { name: 'Remove song', exact: true }).click();
   await expect(page.locator('.track-row')).toHaveCount(1);
 });
